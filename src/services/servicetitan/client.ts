@@ -1,0 +1,282 @@
+import { env } from '../../config/env.js';
+import type {
+  DailyTechnicianSchedule,
+  ServiceTitanAppointmentApiModel,
+  ServiceTitanAssignmentApiModel,
+  ServiceTitanAuthCredentials,
+  ServiceTitanJobTypeApiModel,
+  ServiceTitanPagedResponse,
+  ServiceTitanTechnicianApiModel,
+  ServiceTitanEnvironment,
+  TechnicianScheduleItem,
+} from './types.js';
+
+export class ServiceTitanClient {
+  private readonly authBaseUrl: string;
+  private readonly apiBaseUrl: string;
+  private accessToken?: string;
+  private accessTokenExpiresAt?: number;
+
+  constructor(private readonly credentials: ServiceTitanAuthCredentials) {
+    const environment = env.serviceTitanEnv as ServiceTitanEnvironment;
+    this.authBaseUrl =
+      environment === 'production'
+        ? 'https://auth.servicetitan.io'
+        : 'https://auth-integration.servicetitan.io';
+    this.apiBaseUrl =
+      environment === 'production'
+        ? 'https://api.servicetitan.io'
+        : 'https://api-integration.servicetitan.io';
+
+    console.log('[ServiceTitan] Backend client initialized', {
+      environment,
+      tenantId: this.credentials.tenantId,
+      hasClientId: Boolean(this.credentials.clientId),
+      hasClientSecret: Boolean(this.credentials.clientSecret),
+      hasAppKey: Boolean(this.credentials.appKey),
+    });
+  }
+
+  async ensureAccessToken(): Promise<string> {
+    if (this.accessToken && this.accessTokenExpiresAt && Date.now() < this.accessTokenExpiresAt) {
+      console.log('[ServiceTitan] Reusing cached access token');
+      return this.accessToken;
+    }
+
+    const body = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: this.credentials.clientId,
+      client_secret: this.credentials.clientSecret,
+    });
+
+    console.log('[ServiceTitan] Requesting new access token');
+    const response = await fetch(`${this.authBaseUrl}/connect/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[ServiceTitan] Auth failed', { status: response.status, errorText });
+      throw new Error(`ServiceTitan auth failed: ${response.status} ${errorText}`);
+    }
+
+    const payload = (await response.json()) as { access_token?: string; expires_in?: number };
+    if (!payload.access_token) {
+      throw new Error('ServiceTitan auth response missing access_token');
+    }
+
+    this.accessToken = payload.access_token;
+    if (payload.expires_in) {
+      this.accessTokenExpiresAt = Date.now() + (payload.expires_in - 60) * 1000;
+    }
+    console.log('[ServiceTitan] Access token refreshed', { expiresInSeconds: payload.expires_in });
+    return payload.access_token;
+  }
+
+  private async apiRequest<T>(
+    path: string,
+    query: Record<string, string | number | boolean | undefined> = {}
+  ): Promise<T> {
+    const token = await this.ensureAccessToken();
+    const searchParams = new URLSearchParams();
+
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        searchParams.set(key, String(value));
+      }
+    });
+
+    const url = `${this.apiBaseUrl}${path}${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
+    console.log('[ServiceTitan] API request', { path, query });
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'ST-App-Key': this.credentials.appKey,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[ServiceTitan] API request failed', { path, status: response.status, errorText });
+      throw new Error(`ServiceTitan API failed: ${response.status} ${errorText}`);
+    }
+
+    return (await response.json()) as T;
+  }
+
+  private async apiPost<T>(path: string, body: unknown): Promise<T> {
+    const token = await this.ensureAccessToken();
+    const url = `${this.apiBaseUrl}${path}`;
+    console.log('[ServiceTitan] API POST', { path });
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'ST-App-Key': this.credentials.appKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[ServiceTitan] API POST failed', { path, status: response.status, errorText });
+      throw new Error(`ServiceTitan API failed: ${response.status} ${errorText}`);
+    }
+
+    return (await response.json()) as T;
+  }
+
+  /**
+   * Book a job with at least one appointment. Payload shape follows JPM v2; required fields depend on tenant settings.
+   * @see https://developer.servicetitan.io/docs/api-resources-job-planning/
+   */
+  async bookJob(body: Record<string, unknown>): Promise<unknown> {
+    return this.apiPost(`/jpm/v2/tenant/${this.credentials.tenantId}/jobs`, body);
+  }
+
+  async getJobTypesPage(
+    page: number,
+    pageSize = 250
+  ): Promise<ServiceTitanPagedResponse<ServiceTitanJobTypeApiModel>> {
+    return this.apiRequest<ServiceTitanPagedResponse<ServiceTitanJobTypeApiModel>>(
+      `/jpm/v2/tenant/${this.credentials.tenantId}/job-types`,
+      {
+        page,
+        pageSize,
+        includeTotal: true,
+        active: true,
+      }
+    );
+  }
+
+  /** All active job types, paginated until `hasMore` is false. JPM requires `page` >= 1. */
+  async getAllJobTypes(): Promise<ServiceTitanJobTypeApiModel[]> {
+    const pageSize = 250;
+    const all: ServiceTitanJobTypeApiModel[] = [];
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const res = await this.getJobTypesPage(page, pageSize);
+      const batch = res.data ?? [];
+      all.push(...batch);
+      hasMore = Boolean(res.hasMore && batch.length > 0);
+      page += 1;
+      if (page > 100) {
+        console.warn('[ServiceTitan] job-types pagination safety stop at page 100');
+        break;
+      }
+    }
+
+    console.log('[ServiceTitan] Job types fetched', { count: all.length });
+    return all;
+  }
+
+  async getTechnicians(pageSize = 200): Promise<ServiceTitanTechnicianApiModel[]> {
+    const response = await this.apiRequest<ServiceTitanPagedResponse<ServiceTitanTechnicianApiModel>>(
+      `/settings/v2/tenant/${this.credentials.tenantId}/technicians`,
+      {
+        active: true,
+        includeTotal: true,
+        pageSize,
+      }
+    );
+    const technicians = response.data ?? [];
+    // console.log('[ServiceTitan] technicians response', technicians[0]);
+    console.log('[ServiceTitan] Technicians fetched', { count: technicians.length });
+    return technicians;
+  }
+
+  async getAppointmentsForWindow(params: {
+    startsOnOrAfter: string;
+    startsBefore: string;
+    pageSize?: number;
+  }): Promise<ServiceTitanAppointmentApiModel[]> {
+    const response = await this.apiRequest<ServiceTitanPagedResponse<ServiceTitanAppointmentApiModel>>(
+      `/jpm/v2/tenant/${this.credentials.tenantId}/appointments`,
+      {
+        active: true,
+        startsOnOrAfter: params.startsOnOrAfter,
+        startsBefore: params.startsBefore,
+        pageSize: params.pageSize ?? 500,
+      }
+    );
+    const appointments = response.data ?? [];
+    console.log('[ServiceTitan] Appointments fetched', { count: appointments.length });
+    return appointments;
+  }
+
+  async getAssignmentsByAppointmentIds(appointmentIds: number[]): Promise<ServiceTitanAssignmentApiModel[]> {
+    if (!appointmentIds.length) {
+      console.log('[ServiceTitan] No appointment IDs provided for assignments');
+      return [];
+    }
+
+    const response = await this.apiRequest<ServiceTitanPagedResponse<ServiceTitanAssignmentApiModel>>(
+      `/dispatch/v2/tenant/${this.credentials.tenantId}/appointment-assignments`,
+      {
+        includeTotal: true,
+        active: true,
+        appointmentIds: appointmentIds.join(','),
+      }
+    );
+    const assignments = response.data ?? [];
+    console.log('[ServiceTitan] Assignments fetched', { assignmentCount: assignments.length });
+    return assignments;
+  }
+
+  async getDailyTechnicianSchedule(params: {
+    startsOnOrAfter: string;
+    startsBefore: string;
+  }): Promise<DailyTechnicianSchedule[]> {
+    const [technicians, appointments] = await Promise.all([
+      this.getTechnicians(),
+      this.getAppointmentsForWindow(params),
+    ]);
+
+    const assignments = await this.getAssignmentsByAppointmentIds(appointments.map((a) => a.id));
+    const appointmentsById = new Map<number, ServiceTitanAppointmentApiModel>(
+      appointments.map((appointment) => [appointment.id, appointment])
+    );
+    const technicianById = new Map<number, ServiceTitanTechnicianApiModel>(
+      technicians.map((tech) => [tech.id, tech])
+    );
+
+    const scheduleMap = new Map<number, TechnicianScheduleItem[]>();
+    assignments.forEach((assignment) => {
+      const appointment = appointmentsById.get(assignment.appointmentId);
+      if (!appointment?.start || !appointment?.end) return;
+      const existing = scheduleMap.get(assignment.technicianId) ?? [];
+      existing.push({
+        appointmentId: appointment.id,
+        start: appointment.start,
+        end: appointment.end,
+        status: appointment.status,
+      });
+      scheduleMap.set(assignment.technicianId, existing);
+    });
+
+    return technicians
+      .map((technician) => {
+        const techAppointments = scheduleMap.get(technician.id) ?? [];
+        return {
+          technicianId: String(technician.id),
+          technicianName: technician.name ?? `Technician ${technician.id}`,
+          shiftStart: technician.shiftStart,
+          shiftEnd: technician.shiftEnd,
+          bio: technician.bio,
+          positions: technician.positions ?? [],
+          skills: technician.skills ?? [],
+          appointments: techAppointments.sort((a, b) => a.start.localeCompare(b.start)),
+        };
+      })
+      .sort((a, b) => a.technicianName.localeCompare(b.technicianName));
+  }
+}
