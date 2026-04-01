@@ -66,7 +66,7 @@ const checkAvailabilityBodySchema = z
     technicianIds: z.array(z.string().min(1)).min(1),
     startTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
     endTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
-    durationMinutes: z.coerce.number().int().positive().optional(),
+    duration: z.coerce.number().int().positive().default(60),
     /**
      * Cap on how many windows to return per technician after full expansion (0 = all, up to 2000).
      */
@@ -81,18 +81,18 @@ const checkAvailabilityBodySchema = z
       });
     }
     if (b.startTime) {
-      if (b.endTime == null && b.durationMinutes == null) {
+      if (b.endTime == null && b.duration == null) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['durationMinutes'],
-          message: 'Provide endTime or durationMinutes when startTime is set',
+          path: ['duration'],
+          message: 'Provide endTime or duration when startTime is set',
         });
       }
-    } else if (b.durationMinutes == null) {
+    } else if (b.duration == null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['durationMinutes'],
-        message: 'durationMinutes is required when startTime is omitted',
+        path: ['duration'],
+        message: 'duration is required when startTime is omitted',
       });
     }
   });
@@ -110,11 +110,11 @@ const bookAppointmentBodySchema = z
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     startTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
     endTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
-    durationMinutes: z.coerce.number().int().positive().optional(),
+    duration: z.coerce.number().int().positive().optional().default(60),
     technicianId: z.number().int().positive(),
   })
-  .refine((b) => b.endTime != null || b.durationMinutes != null, {
-    message: 'Provide endTime or durationMinutes',
+  .refine((b) => b.endTime != null || b.duration != null, {
+    message: 'Provide endTime or duration',
   });
 
 function skillListForJobTypeRow(row: RetellJobTypeKbRow): string[] {
@@ -429,7 +429,7 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
         }
         endUtc = parsed;
       } else {
-        const dm = body.durationMinutes;
+        const dm = body.duration;
         if (dm == null) {
           return res.status(400).json({ success: false, error: 'durationMinutes required when endTime is omitted' });
         }
@@ -442,7 +442,7 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
 
       const resolvedDurationMinutes = Math.max(
         1,
-        body.durationMinutes ??
+        body.duration ??
           Math.round((new Date(endUtc).getTime() - new Date(startUtc).getTime()) / 60_000)
       );
 
@@ -489,7 +489,6 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
 
     // 2) Date only: openings that day (earliest + preview list per tech).
     if (body.date && !body.startTime) {
-      const dm = body.durationMinutes as number;
       const window = getUtcDayWindow(body.date, timeZone);
       const schedule = await client.getDailyTechnicianSchedule(window);
       const schedulesForCheck = schedulesForTechnicianIds(schedule, body.technicianIds);
@@ -500,7 +499,7 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
         timeZone,
         shiftStartIso: window.startsOnOrAfter,
         shiftEndIso: window.startsBefore,
-        durationMinutes: dm,
+        durationMinutes: body.duration,
         slotPreviewLimit: body.slotPreviewLimit,
       });
 
@@ -512,7 +511,7 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
           mode: 'day_slots' as const,
           date: body.date,
           timeZone,
-          durationMinutes: dm,
+          durationMinutes: body.duration,
           requestedWindow: null,
           technicians: day.technicians.map((t) => ({
             technicianId: t.technicianId,
@@ -539,7 +538,6 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
       timeZone,
       aggregateShift
     );
-    const dmRange = body.durationMinutes as number;
 
     const window = getUtcDayWindow(searchDate, timeZone);
     const schedule = await client.getDailyTechnicianSchedule(window);
@@ -552,7 +550,7 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
       timeZone,
       shiftStartIso: window.startsOnOrAfter,
       shiftEndIso: window.startsBefore,
-      durationMinutes: dmRange,
+      durationMinutes: body.duration,
       slotPreviewLimit: body.slotPreviewLimit,
     });
 
@@ -580,7 +578,7 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
       data: {
         mode: 'earliest_in_range' as const,
         timeZone,
-        durationMinutes: dmRange,
+        durationMinutes: body.duration,
         searchAnchorStrategy,
         searchDate,
         requestedWindow: null,
@@ -642,7 +640,7 @@ serviceTitanRouter.post('/agent/book', async (req, res) => {
       endUtc = parsed;
     } else {
       endUtc = new Date(
-        new Date(startUtc).getTime() + (body.durationMinutes as number) * 60_000
+        new Date(startUtc).getTime() + (body.duration as number) * 60_000
       ).toISOString();
     }
 
