@@ -49,29 +49,3 @@ export async function loadTenantCredentials(tenantId: number): Promise<{
     timezone: data.timezone,
   };
 }
-
-export async function loadDefaultTenantCredentials(): Promise<{
-  credentials: ServiceTitanAuthCredentials;
-  timezone: string;
-}> {
-  const { data, error } = await supabaseAdmin
-    .from('servicetitan_tenants')
-    .select('tenant_id,client_id,client_secret,app_key,timezone')
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error || !data) {
-    throw new Error('ServiceTitan tenant not configured. Connect ServiceTitan first.');
-  }
-
-  return {
-    credentials: {
-      tenantId: data.tenant_id,
-      clientId: data.client_id,
-      clientSecret: data.client_secret,
-      appKey: data.app_key,
-    },
-    timezone: data.timezone,
-  };
-}

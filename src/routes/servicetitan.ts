@@ -8,7 +8,7 @@ import {
   localWallClockToUtcIso,
   resolveNoDateSearchAnchorYmd,
 } from '../services/servicetitan/date-window.js';
-import { loadDefaultTenantCredentials, saveTenantCredentials } from '../services/servicetitan/credentials.js';
+import { loadTenantCredentials, saveTenantCredentials } from '../services/servicetitan/credentials.js';
 import { computeAgentAvailabilityCheck, computeAgentDaySlotsMode } from '../services/servicetitan/agent-check.js';
 import { resolveJobTypeFromReason } from '../services/servicetitan/job-types-kb.js';
 import {
@@ -19,6 +19,8 @@ import {
 } from '../services/servicetitan/store.js';
 import type { DailyTechnicianSchedule } from '../services/servicetitan/types.js';
 
+const tenantIdField = z.coerce.number().int().positive();
+
 const connectBodySchema = z.object({
   tenantId: z.number().int().positive(),
   clientId: z.string().min(1),
@@ -27,26 +29,39 @@ const connectBodySchema = z.object({
   timezone: z.string().min(1),
 });
 
+const syncQuerySchema = z.object({
+  tenantId: tenantIdField,
+});
+
 const scheduleQuerySchema = z.object({
+  tenantId: tenantIdField,
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 
 const availabilityQuerySchema = z.object({
+  tenantId: tenantIdField,
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   duration: z.coerce.number().int().positive(),
 });
 
+const jobTypesKnowledgeBaseQuerySchema = z.object({
+  tenantId: tenantIdField,
+});
+
 const matchTechniciansBodySchema = z.object({
+  tenantId: tenantIdField,
   skills: z.array(z.string().min(1)).min(1),
 });
 
 const resolveJobTypeBodySchema = z.object({
+  tenantId: tenantIdField,
   reason: z.string().min(1),
   topN: z.coerce.number().int().min(1).max(10).optional().default(3),
 });
 
 const checkAvailabilityBodySchema = z
   .object({
+    tenantId: tenantIdField,
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     technicianIds: z.array(z.string().min(1)).min(1),
     startTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
@@ -84,6 +99,7 @@ const checkAvailabilityBodySchema = z
 
 const bookAppointmentBodySchema = z
   .object({
+    tenantId: tenantIdField,
     customerId: z.number().int().positive(),
     locationId: z.number().int().positive(),
     businessUnitId: z.number().int().positive().optional(),
@@ -150,7 +166,8 @@ serviceTitanRouter.post('/connect', async (req, res) => {
 
 serviceTitanRouter.post('/sync', async (req, res) => {
   try {
-    const { credentials } = await loadDefaultTenantCredentials();
+    const query = syncQuerySchema.parse(req.query);
+    const { credentials } = await loadTenantCredentials(query.tenantId);
     const client = new ServiceTitanClient(credentials);
     const [technicians, jobTypes] = await Promise.all([
       client.getTechnicians(),
@@ -188,7 +205,7 @@ serviceTitanRouter.post('/sync', async (req, res) => {
 serviceTitanRouter.get('/schedule', async (req, res) => {
   try {
     const query = scheduleQuerySchema.parse(req.query);
-    const { credentials, timezone: tenantTimezone } = await loadDefaultTenantCredentials();
+    const { credentials, timezone: tenantTimezone } = await loadTenantCredentials(query.tenantId);
     const client = new ServiceTitanClient(credentials);
     const timeZone = tenantTimezone ?? 'UTC';
     const window = getUtcDayWindow(query.date, timeZone);
@@ -216,7 +233,7 @@ serviceTitanRouter.get('/schedule', async (req, res) => {
 serviceTitanRouter.get('/availability', async (req, res) => {
   try {
     const query = availabilityQuerySchema.parse(req.query);
-    const { credentials, timezone: tenantTimezone } = await loadDefaultTenantCredentials();
+    const { credentials, timezone: tenantTimezone } = await loadTenantCredentials(query.tenantId);
     const client = new ServiceTitanClient(credentials);
     const timeZone = tenantTimezone ?? 'UTC';
     const window = getUtcDayWindow(query.date, timeZone);
@@ -251,7 +268,7 @@ serviceTitanRouter.get('/availability', async (req, res) => {
 serviceTitanRouter.post('/agent/match-technicians', async (req, res) => {
   try {
     const body = matchTechniciansBodySchema.parse(req.body);
-    const { credentials } = await loadDefaultTenantCredentials();
+    const { credentials } = await loadTenantCredentials(body.tenantId);
     const rows = await matchTechniciansBySkills({
       tenantId: credentials.tenantId,
       requiredSkills: body.skills,
@@ -285,10 +302,10 @@ serviceTitanRouter.post('/agent/match-technicians', async (req, res) => {
   }
 });
 
-serviceTitanRouter.get('/job-types/knowledge-base', async (_req, res) => {
+serviceTitanRouter.get('/job-types/knowledge-base', async (req, res) => {
   try {
-    const { credentials } = await loadDefaultTenantCredentials();
-    const data = await loadJobTypesKnowledgeBase(credentials.tenantId);
+    const query = jobTypesKnowledgeBaseQuerySchema.parse(req.query);
+    const data = await loadJobTypesKnowledgeBase(query.tenantId);
     return res.json({ success: true, data });
   } catch (error) {
     console.error('[ServiceTitan] job-types knowledge-base failed', error);
@@ -302,8 +319,7 @@ serviceTitanRouter.get('/job-types/knowledge-base', async (_req, res) => {
 serviceTitanRouter.post('/agent/resolve-job-type', async (req, res) => {
   try {
     const body = resolveJobTypeBodySchema.parse(req.body);
-    const { credentials } = await loadDefaultTenantCredentials();
-    const kb = await loadJobTypesKnowledgeBase(credentials.tenantId);
+    const kb = await loadJobTypesKnowledgeBase(body.tenantId);
     const { matches } = resolveJobTypeFromReason(body.reason, kb, body.topN);
     const candidates = matches.map((m) => ({
       jobTypeId: m.jobTypeId,
@@ -348,7 +364,7 @@ function schedulesForTechnicianIds(schedule: DailyTechnicianSchedule[], technici
 serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
   try {
     const body = checkAvailabilityBodySchema.parse(req.body);
-    const { credentials, timezone: tenantTimezone } = await loadDefaultTenantCredentials();
+    const { credentials, timezone: tenantTimezone } = await loadTenantCredentials(body.tenantId);
     const client = new ServiceTitanClient(credentials);
     const timeZone = tenantTimezone ?? 'UTC';
 
@@ -572,7 +588,7 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
 serviceTitanRouter.post('/agent/book', async (req, res) => {
   try {
     const body = bookAppointmentBodySchema.parse(req.body);
-    const { credentials, timezone: tenantTimezone } = await loadDefaultTenantCredentials();
+    const { credentials, timezone: tenantTimezone } = await loadTenantCredentials(body.tenantId);
     const client = new ServiceTitanClient(credentials);
     const timeZone = tenantTimezone ?? 'UTC';
 
