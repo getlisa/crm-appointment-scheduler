@@ -10,7 +10,7 @@ import {
 } from '../services/servicetitan/date-window.js';
 import { loadTenantCredentials, saveTenantCredentials } from '../services/servicetitan/credentials.js';
 import { computeAgentAvailabilityCheck, computeAgentDaySlotsMode } from '../services/servicetitan/agent-check.js';
-import { resolveJobTypeFromReason } from '../services/servicetitan/job-types-kb.js';
+import { resolveJobTypeFromReason, type RetellJobTypeKbRow } from '../services/servicetitan/job-types-kb.js';
 import {
   loadJobTypesKnowledgeBase,
   matchTechniciansBySkills,
@@ -116,6 +116,51 @@ const bookAppointmentBodySchema = z
   .refine((b) => b.endTime != null || b.durationMinutes != null, {
     message: 'Provide endTime or durationMinutes',
   });
+
+function skillListForJobTypeRow(row: RetellJobTypeKbRow): string[] {
+  const raw = row.skillNames.length > 0 ? row.skillNames : row.skills;
+  return raw.map((s) => String(s).trim()).filter(Boolean);
+}
+
+/**
+ * Returns up to `topN` skills aligned with ranked job-type matches: first takes one skill per
+ * match in rank order, then fills remaining slots from additional skills on those same rows
+ * (rank order, then position within each row) so default topN=3 yields three skills when available.
+ */
+function skillsAlignedWithTopNMatches(
+  matches: { row: RetellJobTypeKbRow }[],
+  topN: number
+): string[] {
+  const want = topN;
+  if (want <= 0 || matches.length === 0) return [];
+
+  const lists = matches.map((m) => skillListForJobTypeRow(m.row));
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < Math.min(lists.length, want); i++) {
+    const first = lists[i][0];
+    if (first && !seen.has(first)) {
+      seen.add(first);
+      out.push(first);
+    }
+  }
+
+  for (let idx = 1; out.length < want; idx++) {
+    let added = false;
+    for (let i = 0; i < lists.length && out.length < want; i++) {
+      const s = lists[i][idx];
+      if (s && !seen.has(s)) {
+        seen.add(s);
+        out.push(s);
+        added = true;
+      }
+    }
+    if (!added) break;
+  }
+
+  return out;
+}
 
 function normalizeTimeComponent(t: string): string {
   return t.length === 5 ? `${t}:00` : t;
@@ -288,7 +333,6 @@ serviceTitanRouter.post('/agent/match-technicians', async (req, res) => {
       return {
         technicianId: String(r.technician_id),
         name: r.name ?? `Technician ${r.technician_id}`,
-        matchedSkills: matchedNames,
       };
     });
 
@@ -321,23 +365,15 @@ serviceTitanRouter.post('/agent/resolve-job-type', async (req, res) => {
     const body = resolveJobTypeBodySchema.parse(req.body);
     const kb = await loadJobTypesKnowledgeBase(body.tenantId);
     const { matches } = resolveJobTypeFromReason(body.reason, kb, body.topN);
-    const candidates = matches.map((m) => ({
-      jobTypeId: m.jobTypeId,
-      score: m.score,
-      name: m.row.name,
-      code: m.row.code,
-      summary: m.row.summary,
-      durationMinutes: m.row.durationMinutes,
-      durationSeconds: m.row.durationSeconds,
-      skillNames: m.row.skillNames,
-      skills: m.row.skills,
-    }));
+    const top = matches[0];
+    const skills = skillsAlignedWithTopNMatches(matches, body.topN);
+    const duration = top?.row.durationMinutes ?? null;
 
     return res.json({
       success: true,
       data: {
-        bestMatch: candidates[0] ?? null,
-        candidates,
+        skills,
+        duration,
       },
     });
   } catch (error) {
