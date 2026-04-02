@@ -8,6 +8,9 @@ export type RetellJobTypeKbRow = {
   skills: string[];
   skillNames: string[];
   intentHints: string[];
+  priority: string | null;
+  /** First ServiceTitan `businessUnitIds` entry; exposed as `businessId` on resolve-job-type. */
+  businessUnitId: number | null;
 };
 
 export type RetellJobTypesKnowledgeBase = {
@@ -26,6 +29,8 @@ export function buildKnowledgeBaseDocument(params: {
     duration_seconds: number | null;
     skills: string[];
     intent_hints: string[] | null;
+    priority: string | null;
+    business_unit_id: number | null;
   }[];
 }): RetellJobTypesKnowledgeBase {
   const jobTypes: RetellJobTypeKbRow[] = params.rows.map((r) => {
@@ -43,6 +48,11 @@ export function buildKnowledgeBaseDocument(params: {
       skills,
       skillNames: skills.filter(Boolean),
       intentHints: r.intent_hints ?? [],
+      priority: r.priority ?? null,
+      businessUnitId:
+        r.business_unit_id != null && Number.isFinite(Number(r.business_unit_id))
+          ? Number(r.business_unit_id)
+          : null,
     };
   });
 

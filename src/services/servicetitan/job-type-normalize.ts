@@ -7,12 +7,24 @@ export type NormalizedJobType = {
   summary: string | null;
   durationSeconds: number | null;
   skills: string[];
+  /** e.g. "Normal", "High" from JPM job-types. */
+  priority: string | null;
+  /** First entry of `businessUnitIds` from API. */
+  businessUnitId: number | null;
 };
 
 function pickStr(v: unknown): string | null {
   if (v == null) return null;
   const s = String(v).trim();
   return s.length ? s : null;
+}
+
+function firstBusinessUnitId(raw: Record<string, unknown>): number | null {
+  const arr = raw.businessUnitIds ?? raw.BusinessUnitIds;
+  if (!Array.isArray(arr) || arr.length === 0) return null;
+  const first = arr[0];
+  const n = typeof first === 'number' ? first : Number(first);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /**
@@ -94,6 +106,9 @@ export function normalizeJobTypeRecord(raw: Record<string, unknown>): Normalized
     raw.skills ?? raw.Skills ?? raw.tradeSkills ?? raw.TradeSkills ?? raw.requiredSkills
   );
 
+  const priority = pickStr(raw.priority ?? raw.Priority);
+  const businessUnitId = firstBusinessUnitId(raw);
+
   return {
     id,
     name,
@@ -101,6 +116,8 @@ export function normalizeJobTypeRecord(raw: Record<string, unknown>): Normalized
     summary,
     durationSeconds,
     skills: skills.map((s) => s.name ?? '').filter(Boolean),
+    priority,
+    businessUnitId,
   };
 }
 

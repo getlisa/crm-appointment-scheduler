@@ -1,6 +1,6 @@
-# ServiceTitan agent APIs: resolve job type, match technicians, check availability
+# ServiceTitan agent APIs: resolve job type, match technicians, check availability, resolve customer/location
 
-This document describes three HTTP endpoints used to classify a visit, find qualified technicians, and verify or discover time slots before booking. All routes are mounted under **`/api/servicetitan`**.
+This document describes HTTP endpoints used to classify a visit, resolve ServiceTitan customer/location ids, find qualified technicians, and verify or discover time slots before booking. All routes are mounted under **`/api/servicetitan`**.
 
 ## Conventions
 
@@ -36,13 +36,19 @@ Maps a free-text **reason** (what the customer said) to ServiceTitan job types u
             "DIAG P LEAK KITCHEN",
             "UNCLOG P BLOCKED KITCHEN"
         ],
-    "duration": 60
+    "duration": 60,
+    "priority": "Normal",
+    "businessId": 69205044,
+    "jobTypeId": 37637
   }
 }
 ```
 
 - **`skills`:** Up to **`topN`** entries (default **3**), aligned with the ranked job-type matches. First pass: one skill per match in score order (first skill on each row). If fewer than **`topN`** skills were collected (e.g. only one job type matched), remaining slots are filled with the next distinct skills from those same ranked rows, in rank order. Uses **`skillNames`** when present, else raw **`skills`**. Empty array if nothing matched.
 - **`duration`:** Appointment length in **minutes** for the **top-scoring** job type only (`durationMinutes` from the knowledge base), or **`null`** if unknown or no match.
+- **`priority`:** Job-type priority from ServiceTitan (e.g. `"Normal"`), from the **top-scoring** match, or **`null`** if missing or no match.
+- **`businessId`:** First element of ServiceTitan `businessUnitIds` for the **top-scoring** job type (`businessId` = `businessUnitIds[0]`). Or **`null`** if none or no match. Re-sync job types after adding DB columns so cache includes these fields.
+- **`jobTypeId`:** ServiceTitan job type id for the **top-scoring** match, or **`null`** if no match.
 
 Scoring uses token overlap on name, code, summary, intent hints, and skills (`resolveJobTypeFromReason` / `scoreJobTypeMatch` in `src/services/servicetitan/job-types-kb.ts`). **`topN`** limits how many job types are ranked; **`skills`** returns up to that many skill strings when the data allows.
 
@@ -85,7 +91,55 @@ An empty **`data`** array means no active technician has all required skills.
 
 ---
 
-## 3. Check availability
+## 3. Resolve customer and location
+
+**`POST /api/servicetitan/agent/resolve-customer-location`**
+
+Resolves (and if needed creates) ServiceTitan **`customerId`** and **`locationId`** using the same logic as **`/agent/book`**, without booking a job. Use this from Retell (or any client) to obtain IDs, then call **`book`** with **`customerId`** + **`locationId`** only.
+
+### Request body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tenantId` | number (integer, positive) | **Yes** | Tenant. |
+| `customerId` | number | Conditional | With **`locationId`**, skips lookup. |
+| `locationId` | number | Conditional | With **`customerId`**, skips lookup. |
+| `customerName` | string | Conditional | With **`phone`** + **`address`**, used to find/create customer. |
+| `phone` | string | Conditional | Same as book. |
+| `address` | object | Conditional | **`street`**, **`city`**, **`state`**, **`zip`**, **`country`**, optional **`unit`**. |
+
+Either **`customerId` + `locationId`**, or **`customerName` + `phone` + `address`**, is required.
+
+### Success response — `data`
+
+```json
+{
+  "success": true,
+  "data": {
+    "customerId": 47116,
+    "locationId": 71773,
+    "status": "matched_existing",
+    "customerCreated": false,
+    "locationCreated": false
+  }
+}
+```
+
+### `status` values
+
+| `status` | Meaning |
+|----------|--------|
+| **`ids_provided`** | Caller sent both **`customerId`** and **`locationId`**; no ServiceTitan create calls. |
+| **`matched_existing`** | Existing customer and existing location matched (cache/API); neither created. |
+| **`customer_matched_location_created`** | Existing customer; **`POST /locations`** created a new location. |
+| **`customer_created_location_matched`** | **`POST /customers`** created the customer; location matched (e.g. embedded or found). |
+| **`customer_and_location_created`** | Both customer and location were created via ServiceTitan. |
+
+**`customerCreated`** / **`locationCreated`** mirror the internal flags for tooling and debugging.
+
+---
+
+## 4. Check availability
 
 **`POST /api/servicetitan/agent/check-availability`**
 
@@ -160,22 +214,82 @@ Chooses an anchor calendar day (today vs tomorrow) from aggregate shift logic fo
 
 ---
 
+## 5. Check availability by reason
+
+**`POST /api/servicetitan/agent/check-availability-by-reason`**
+
+Single call equivalent to **`resolve-job-type`** → **`match-technicians`** → **`check-availability`**: derives **`skills`** and **duration** from the top job-type match for **`reason`**, resolves **technician IDs** (including optional **`SERVICETITAN_FALLBACK_TECHNICIAN_ID`** when no skill match), then runs the same three response modes as [**check availability**](#4-check-availability) above.
+
+### Request body
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tenantId` | number | **Yes** | Tenant. |
+| `reason` | string | **Yes** | Same as **`resolve-job-type`** (customer utterance / problem description). |
+| `topN` | number (1–10) | No | Default **3**; controls skill alignment breadth from ranked matches. |
+| `date` | `YYYY-MM-DD` | No | Same semantics as **`check-availability`**. Required if **`startTime`** or **`time`** is set. |
+| `startTime` | `HH:mm` / `HH:mm:ss` | No | Same as **`check-availability`**. Do not send both **`startTime`** and **`time`**. |
+| `time` | `HH:mm` / `HH:mm:ss` | No | Alias for **`startTime`** (e.g. voice agents). |
+| `endTime` | `HH:mm` / `HH:mm:ss` | No | Same as **`check-availability`** when validating a specific window. |
+| `duration` | integer (minutes) | No | Overrides duration from the matched job type; if still missing, **60** is used for slot search. |
+| `slotPreviewLimit` | 0–2000 | No | Default **0** (no cap). |
+
+### Response `data`
+
+Same scheduling **`mode`** and fields as **`check-availability`** for that mode, **only** those fields (no extra debug objects), plus at the top level of **`data`**:
+
+- **`jobTypeId`** — from the top job-type match for **`reason`**
+- **`priority`** — from that row (or **`null`**)
+- **`businessId`** — first business unit id for booking (or **`null`**)
+
+Example (`earliest_in_range`): **`mode`**, **`timeZone`**, **`durationMinutes`**, **`jobTypeId`**, **`priority`**, **`businessId`**, **`searchAnchorStrategy`**, **`searchDate`**, **`requestedWindow`**, **`technicians`**, **`globalEarliestSlot`**.
+
+If no job type scores for **`reason`**, no skills are derived, or no technicians match and fallback is not configured, the handler returns **400** with an error message.
+
+---
+
 ## How these APIs connect for booking
 
 The endpoint that creates the appointment is:
 
 **`POST /api/servicetitan/agent/book`**
 
+The server builds the ServiceTitan JPM job body (string ids where applicable, **`arrivalWindowStart` / `arrivalWindowEnd`**, **`campaignId`** from environment **`SERVICETITAN_CAMPAIGN_ID`** — not from the request).
+
+### Book — request body (normalized JSON)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tenantId` | number | **Yes** | Tenant. |
+| `customerId` | number | Conditional | With **`locationId`**, or omit and use **`customerName` + `phone` + `address`**. |
+| `locationId` | number | Conditional | With **`customerId`**, or omit and use customer context. |
+| `customerName`, `phone`, `address` | | Conditional | Same rules as **`resolve-customer-location`**. |
+| `businessUnitId` | number | **Yes** | Maps to ST **`businessUnitId`** (often from **`resolve-job-type`** **`businessId`**). |
+| `jobTypeId` | number | **Yes** | From **`resolve-job-type`**. |
+| `priority` | string | **Yes** | e.g. **`"Normal"`** (from **`resolve-job-type`** when available). |
+| `date` | `YYYY-MM-DD` | **Yes** | Local calendar date in tenant timezone. |
+| `startTime` | `HH:mm` or `HH:mm:ss` | **Yes** | |
+| `endTime` or `duration` | | **Yes** | Same validation as check-availability. |
+| `technicianId` | number | **Yes** | |
+| `summary` | string | No | Defaults server-side to **`"Scheduled appointment"`** in the ST payload if omitted. |
+
+**Environment:** set **`SERVICETITAN_CAMPAIGN_ID`** (string) in `.env` for the integration campaign id.
+
+### Book — success `data` (high level)
+
+Includes **`jobId`**, **`appointmentId`**, **`customerId`**, **`locationId`**, **`status`** (same values as **`resolve-customer-location`**: whether ids were supplied vs customer/location created), **`customerCreated`**, **`locationCreated`**, **`technicianId`**, localized **`start`/`end`** and **`startUtc`/`endUtc`**.
+
 Typical flow:
 
-1. **`resolve-job-type`** — Input: customer **`reason`**. Output: **`skills`** (up to 3) and **`duration`** (minutes) for the top match. Pass **`skills`** to match-technicians; use **`duration`** for check-availability **`durationMinutes`**. Optional **`jobTypeId`** on book can be set from your CRM if needed (this endpoint no longer returns **`jobTypeId`**).
+1. **`resolve-job-type`** — Input: customer **`reason`**. Output: **`skills`**, **`duration`**, **`jobTypeId`**, **`priority`**, **`businessId`** for the top match. Pass **`skills`** to match-technicians; use **`duration`** for check-availability; pass **`jobTypeId`** (and optional **`businessId`**) to **`book`**.
 2. **`match-technicians`** — Input: **`skills`** from step 1 (or a manual list). Output: **`technicianId`** strings for check-availability.
-3. **`check-availability`** — Input: **`technicianIds`**, **`durationMinutes`**, and either a full **`date`** (with optional **`startTime`**) or no **`date`** for next-earliest behavior. Output: who fits, alternatives, or open slots. The user picks **`date`**, **`startTime`**, and a **technician**.
-4. **`book`** — Requires **`tenantId`**, **`customerId`**, **`locationId`**, **`date`**, **`startTime`**, **`technicianId`** (number), and **`endTime` or `durationMinutes`**. Optional: **`jobTypeId`**, **`businessUnitId`**, **`campaignId`**, **`priority`**, **`summary`**.
+3. **`check-availability`** — Input: **`technicianIds`**, **`durationMinutes`**, and either a full **`date`** (with optional **`startTime`**) or no **`date`** for next-earliest behavior. Output: who fits, alternatives, or open slots. The user picks **`date`**, **`startTime`**, and a **technician**. **Alternatively**, use **`check-availability-by-reason`** with **`reason`** (and the same optional **`date`** / **`startTime`** / **`time`**) to perform steps 1–3 in one HTTP call.
+4. **`resolve-customer-location`** (optional) — If you want IDs before booking, call with **`customerName` + `phone` + `address`** (or known IDs). Use returned **`customerId`** and **`locationId`** in **`book`**.
+5. **`book`** — Requires **`tenantId`**, **`businessUnitId`**, **`jobTypeId`**, **`priority`**, **`date`**, **`startTime`**, **`technicianId`** (number), **`endTime` or `duration`**, and either **`customerId` + `locationId`** or **`customerName` + `phone` + `address`**. Optional **`summary`**. **`campaignId`** is taken from **`SERVICETITAN_CAMPAIGN_ID`** in `.env`.
 
 **Prerequisites**
 
-- Tenant must be connected and **`/api/servicetitan/sync`** (or equivalent) must have populated technicians and job types.
+- Tenant must be connected and **`/api/servicetitan/sync?tenantId=<id>&includeCrm=true`** (or equivalent) should be run to populate technicians, job types, customers, and locations caches.
 - Resolve-job-type depends on the job-types knowledge base populated during job-type sync.
 
 **ID types**
@@ -190,4 +304,7 @@ Typical flow:
 |-----|-----------------|-------------------------|
 | **resolve-job-type** | `tenantId`, `reason` | `topN` (default 3) |
 | **match-technicians** | `tenantId`, `skills` (≥1 string) | — |
+| **resolve-customer-location** | `tenantId` | **`customerId` + `locationId`** *or* **`customerName` + `phone` + `address`** |
 | **check-availability** | `tenantId`, `technicianIds` (≥1) | `date`, `startTime`, `endTime`, `durationMinutes`, `slotPreviewLimit` — see validation rules above |
+| **check-availability-by-reason** | `tenantId`, `reason` | `topN`, `date`, `startTime` or `time`, `endTime`, `duration`, `slotPreviewLimit` |
+| **book** | `tenantId`, `businessUnitId`, `jobTypeId`, `priority`, `date`, `startTime`, `technicianId`, `endTime` or `duration` | **`customerId` + `locationId`** *or* **`customerName` + `phone` + `address`**; optional `summary`; **`SERVICETITAN_CAMPAIGN_ID`** in env |

@@ -8,9 +8,16 @@ import type {
   TechnicianScheduleItem,
   ServiceTitanAppointmentApiModel,
   ServiceTitanAssignmentApiModel,
+  ServiceTitanCustomerApiModel,
   ServiceTitanJobTypeApiModel,
+  ServiceTitanLocationApiModel,
   ServiceTitanTechnicianApiModel,
 } from './types.js';
+
+function normalizePhoneForLookup(phone: string | null | undefined): string | null {
+  const digits = String(phone ?? '').replace(/\D+/g, '');
+  return digits.length ? digits : null;
+}
 
 
 export async function upsertServiceTitanSnapshot(params: {
@@ -175,6 +182,8 @@ export async function upsertServiceTitanJobTypes(params: {
     summary: jt.summary,
     duration_seconds: jt.durationSeconds,
     skills: jt.skills,
+    priority: jt.priority,
+    business_unit_id: jt.businessUnitId,
     is_active: true,
     intent_hints: hintsById.get(jt.id) ?? [],
     updated_at: now,
@@ -188,10 +197,151 @@ export async function upsertServiceTitanJobTypes(params: {
   if (error) throw new Error(`Failed upserting job types: ${error.message}`);
 }
 
+export async function upsertServiceTitanCustomers(params: {
+  tenantId: number;
+  customers: ServiceTitanCustomerApiModel[];
+}) {
+  const now = new Date().toISOString();
+  const rows = params.customers.map((customer) => {
+    const contacts = Array.isArray(customer.contacts) ? customer.contacts : [];
+    const phone = contacts
+      .map((c) => String(c.value ?? '').trim())
+      .find((v) => v.length > 0) ?? null;
+    return {
+      tenant_id: params.tenantId,
+      customer_id: customer.id,
+      name: customer.name ?? null,
+      phone,
+      normalized_phone: normalizePhoneForLookup(phone),
+      address_street: customer.address?.street ?? null,
+      address_unit: customer.address?.unit ?? null,
+      address_city: customer.address?.city ?? null,
+      address_state: customer.address?.state ?? null,
+      address_zip: customer.address?.zip ?? null,
+      address_country: customer.address?.country ?? null,
+      raw_contacts: contacts,
+      updated_at: now,
+    };
+  });
+  if (!rows.length) return;
+  const { error } = await supabaseAdmin.from('servicetitan_customers').upsert(rows, {
+    onConflict: 'tenant_id,customer_id',
+  });
+  if (error) throw new Error(`Failed upserting customers: ${error.message}`);
+}
+
+export async function upsertServiceTitanLocations(params: {
+  tenantId: number;
+  locations: ServiceTitanLocationApiModel[];
+}) {
+  const now = new Date().toISOString();
+  const rows = params.locations.map((location) => ({
+    tenant_id: params.tenantId,
+    location_id: location.id,
+    customer_id: location.customerId ?? null,
+    name: location.name ?? null,
+    address_street: location.address?.street ?? null,
+    address_unit: location.address?.unit ?? null,
+    address_city: location.address?.city ?? null,
+    address_state: location.address?.state ?? null,
+    address_zip: location.address?.zip ?? null,
+    address_country: location.address?.country ?? null,
+    updated_at: now,
+  }));
+  if (!rows.length) return;
+  const customerIds = [...new Set(rows.map((row) => row.customer_id).filter((v): v is number => v != null))];
+  if (customerIds.length) {
+    const existingCustomerIds = new Set<number>();
+    const chunkSize = 200;
+    for (let i = 0; i < customerIds.length; i += chunkSize) {
+      const chunk = customerIds.slice(i, i + chunkSize);
+      const { data, error } = await supabaseAdmin
+        .from('servicetitan_customers')
+        .select('customer_id')
+        .eq('tenant_id', params.tenantId)
+        .in('customer_id', chunk);
+      if (error) throw new Error(`Failed validating location customer references: ${error.message}`);
+      for (const row of data ?? []) {
+        existingCustomerIds.add(Number(row.customer_id));
+      }
+    }
+    for (const row of rows) {
+      if (row.customer_id != null && !existingCustomerIds.has(row.customer_id)) {
+        row.customer_id = null;
+      }
+    }
+  }
+  const { error } = await supabaseAdmin.from('servicetitan_locations').upsert(rows, {
+    onConflict: 'tenant_id,location_id',
+  });
+  if (error) throw new Error(`Failed upserting locations: ${error.message}`);
+}
+
+export type CachedCustomerRow = {
+  customer_id: number;
+  name: string | null;
+  phone: string | null;
+  normalized_phone: string | null;
+  address_street: string | null;
+  address_unit: string | null;
+  address_city: string | null;
+  address_state: string | null;
+  address_zip: string | null;
+  address_country: string | null;
+};
+
+export async function findCachedCustomersByPhone(params: {
+  tenantId: number;
+  phone: string;
+}): Promise<CachedCustomerRow[]> {
+  const normalizedPhone = normalizePhoneForLookup(params.phone);
+  if (!normalizedPhone) return [];
+  const { data, error } = await supabaseAdmin
+    .from('servicetitan_customers')
+    .select(
+      'customer_id,name,phone,normalized_phone,address_street,address_unit,address_city,address_state,address_zip,address_country'
+    )
+    .eq('tenant_id', params.tenantId)
+    .eq('normalized_phone', normalizedPhone)
+    .limit(100);
+  if (error) throw new Error(`Failed loading cached customers: ${error.message}`);
+  return (data ?? []) as CachedCustomerRow[];
+}
+
+export type CachedLocationRow = {
+  location_id: number;
+  customer_id: number | null;
+  name: string | null;
+  address_street: string | null;
+  address_unit: string | null;
+  address_city: string | null;
+  address_state: string | null;
+  address_zip: string | null;
+  address_country: string | null;
+};
+
+export async function findCachedLocationsByCustomerId(params: {
+  tenantId: number;
+  customerId: number;
+}): Promise<CachedLocationRow[]> {
+  const { data, error } = await supabaseAdmin
+    .from('servicetitan_locations')
+    .select(
+      'location_id,customer_id,name,address_street,address_unit,address_city,address_state,address_zip,address_country'
+    )
+    .eq('tenant_id', params.tenantId)
+    .eq('customer_id', params.customerId)
+    .limit(200);
+  if (error) throw new Error(`Failed loading cached locations: ${error.message}`);
+  return (data ?? []) as CachedLocationRow[];
+}
+
 export async function loadJobTypesKnowledgeBase(tenantId: number): Promise<RetellJobTypesKnowledgeBase> {
   const { data, error } = await supabaseAdmin
     .from('servicetitan_job_types')
-    .select('job_type_id,name,code,summary,duration_seconds,skills,intent_hints')
+    .select(
+      'job_type_id,name,code,summary,duration_seconds,skills,intent_hints,priority,business_unit_id'
+    )
     .eq('tenant_id', tenantId)
     .eq('is_active', true)
     .order('name', { ascending: true });
@@ -208,6 +358,8 @@ export async function loadJobTypesKnowledgeBase(tenantId: number): Promise<Retel
       duration_seconds: number | null;
       skills: string[];
       intent_hints: string[] | null;
+      priority: string | null;
+      business_unit_id: number | null;
     }[],
   });
 }

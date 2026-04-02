@@ -4,7 +4,9 @@ import type {
   ServiceTitanAppointmentApiModel,
   ServiceTitanAssignmentApiModel,
   ServiceTitanAuthCredentials,
+  ServiceTitanCustomerApiModel,
   ServiceTitanJobTypeApiModel,
+  ServiceTitanLocationApiModel,
   ServiceTitanPagedResponse,
   ServiceTitanTechnicianApiModel,
   ServiceTitanEnvironment,
@@ -192,6 +194,136 @@ export class ServiceTitanClient {
     // console.log('[ServiceTitan] technicians response', technicians[0]);
     console.log('[ServiceTitan] Technicians fetched', { count: technicians.length });
     return technicians;
+  }
+
+  async findCustomers(params: {
+    phone?: string;
+    name?: string;
+    street?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+    country?: string;
+    pageSize?: number;
+  }): Promise<ServiceTitanCustomerApiModel[]> {
+    const response = await this.apiRequest<ServiceTitanPagedResponse<ServiceTitanCustomerApiModel>>(
+      `/crm/v2/tenant/${this.credentials.tenantId}/customers`,
+      {
+        includeTotal: true,
+        page: 1,
+        pageSize: params.pageSize ?? 200,
+        phone: params.phone,
+        name: params.name,
+        street: params.street,
+        city: params.city,
+        state: params.state,
+        zip: params.zip,
+        country: params.country,
+      }
+    );
+    return response.data ?? [];
+  }
+
+  async getCustomersPage(
+    page: number,
+    pageSize = 500
+  ): Promise<ServiceTitanPagedResponse<ServiceTitanCustomerApiModel>> {
+    return this.apiRequest<ServiceTitanPagedResponse<ServiceTitanCustomerApiModel>>(
+      `/crm/v2/tenant/${this.credentials.tenantId}/customers`,
+      {
+        includeTotal: true,
+        active: true,
+        page,
+        pageSize,
+      }
+    );
+  }
+
+  async getAllCustomers(): Promise<ServiceTitanCustomerApiModel[]> {
+    const pageSize = 500;
+    const all: ServiceTitanCustomerApiModel[] = [];
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      const res = await this.getCustomersPage(page, pageSize);
+      const batch = res.data ?? [];
+      all.push(...batch.filter((row) => row.active !== false));
+      hasMore = Boolean(res.hasMore && batch.length > 0);
+      page += 1;
+      if (page > 200) break;
+    }
+    return all;
+  }
+
+  async createCustomer(body: Record<string, unknown>): Promise<ServiceTitanCustomerApiModel> {
+    return this.apiPost<ServiceTitanCustomerApiModel>(
+      `/crm/v2/tenant/${this.credentials.tenantId}/customers`,
+      body
+    );
+  }
+
+  async findLocations(params: {
+    customerId?: number;
+    street?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+    country?: string;
+    pageSize?: number;
+  }): Promise<ServiceTitanLocationApiModel[]> {
+    const response = await this.apiRequest<ServiceTitanPagedResponse<ServiceTitanLocationApiModel>>(
+      `/crm/v2/tenant/${this.credentials.tenantId}/locations`,
+      {
+        includeTotal: true,
+        page: 1,
+        pageSize: params.pageSize ?? 200,
+        customerId: params.customerId,
+        street: params.street,
+        city: params.city,
+        state: params.state,
+        zip: params.zip,
+        country: params.country,
+      }
+    );
+    return response.data ?? [];
+  }
+
+  async getLocationsPage(
+    page: number,
+    pageSize = 500
+  ): Promise<ServiceTitanPagedResponse<ServiceTitanLocationApiModel>> {
+    return this.apiRequest<ServiceTitanPagedResponse<ServiceTitanLocationApiModel>>(
+      `/crm/v2/tenant/${this.credentials.tenantId}/locations`,
+      {
+        includeTotal: true,
+        active: true,
+        page,
+        pageSize,
+      }
+    );
+  }
+
+  async getAllLocations(): Promise<ServiceTitanLocationApiModel[]> {
+    const pageSize = 500;
+    const all: ServiceTitanLocationApiModel[] = [];
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      const res = await this.getLocationsPage(page, pageSize);
+      const batch = res.data ?? [];
+      all.push(...batch.filter((row) => row.active !== false));
+      hasMore = Boolean(res.hasMore && batch.length > 0);
+      page += 1;
+      if (page > 200) break;
+    }
+    return all;
+  }
+
+  async createLocation(body: Record<string, unknown>): Promise<ServiceTitanLocationApiModel> {
+    return this.apiPost<ServiceTitanLocationApiModel>(
+      `/crm/v2/tenant/${this.credentials.tenantId}/locations`,
+      body
+    );
   }
 
   async getAppointmentsForWindow(params: {

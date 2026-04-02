@@ -13,6 +13,7 @@ Node backend for ServiceTitan integration and technician scheduling.
 
 - `PORT=8080`
 - `SERVICETITAN_ENV=integration`
+- `SERVICETITAN_CAMPAIGN_ID=...` (JPM job booking campaign)
 - `SUPABASE_URL=...`
 - `SUPABASE_SERVICE_ROLE_KEY=...`
 

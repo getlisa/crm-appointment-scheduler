@@ -15,6 +15,37 @@ export type ServiceTitanPagedResponse<T> = {
   totalCount?: number;
 };
 
+export type ServiceTitanAddress = {
+  street?: string | null;
+  unit?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  country?: string | null;
+};
+
+export type ServiceTitanContact = {
+  type?: unknown;
+  value?: string | null;
+  memo?: string | null;
+};
+
+export type ServiceTitanCustomerApiModel = {
+  id: number;
+  active?: boolean;
+  name?: string | null;
+  address?: ServiceTitanAddress | null;
+  contacts?: ServiceTitanContact[] | null;
+};
+
+export type ServiceTitanLocationApiModel = {
+  id: number;
+  active?: boolean;
+  customerId?: number;
+  name?: string | null;
+  address?: ServiceTitanAddress | null;
+};
+
 export type ServiceTitanTechnicianApiModel = {
   id: number;
   userId?: number;
