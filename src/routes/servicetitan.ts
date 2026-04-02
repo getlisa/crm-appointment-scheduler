@@ -56,21 +56,39 @@ const matchTechniciansBodySchema = z.object({
 const resolveJobTypeBodySchema = z.object({
   tenantId: tenantIdField,
   reason: z.string().min(1),
-  topN: z.coerce.number().int().min(1).max(10).optional().default(3),
+  topN: z.preprocess(
+    (v) => (v === null ? undefined : v),
+    z.coerce.number().int().min(1).max(10).optional().default(3)
+  ),
 });
 
 const checkAvailabilityBodySchema = z
   .object({
     tenantId: tenantIdField,
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    date: z.preprocess(
+      (v) => (v === null ? undefined : v),
+      z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+    ),
     technicianIds: z.array(z.string().min(1)).min(1),
-    startTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
-    endTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
-    duration: z.coerce.number().int().positive().default(60),
+    startTime: z.preprocess(
+      (v) => (v === null ? undefined : v),
+      z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional()
+    ),
+    endTime: z.preprocess(
+      (v) => (v === null ? undefined : v),
+      z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional()
+    ),
+    duration: z.preprocess(
+      (v) => (v === null ? undefined : v),
+      z.coerce.number().int().positive().default(60)
+    ),
     /**
      * Cap on how many windows to return per technician after full expansion (0 = all, up to 2000).
      */
-    slotPreviewLimit: z.coerce.number().int().min(0).max(2000).optional().default(0),
+    slotPreviewLimit: z.preprocess(
+      (v) => (v === null ? undefined : v),
+      z.coerce.number().int().min(0).max(2000).optional().default(0)
+    ),
   })
   .superRefine((b, ctx) => {
     if (b.startTime && !b.date) {
@@ -102,15 +120,30 @@ const bookAppointmentBodySchema = z
     tenantId: tenantIdField,
     customerId: z.number().int().positive(),
     locationId: z.number().int().positive(),
-    businessUnitId: z.number().int().positive().optional(),
-    jobTypeId: z.number().int().positive().optional(),
-    campaignId: z.number().int().positive().optional(),
-    priority: z.string().optional(),
-    summary: z.string().optional(),
+    businessUnitId: z.preprocess(
+      (v) => (v === null ? undefined : v),
+      z.number().int().positive().optional()
+    ),
+    jobTypeId: z.preprocess(
+      (v) => (v === null ? undefined : v),
+      z.number().int().positive().optional()
+    ),
+    campaignId: z.preprocess(
+      (v) => (v === null ? undefined : v),
+      z.number().int().positive().optional()
+    ),
+    priority: z.preprocess((v) => (v === null ? undefined : v), z.string().optional()),
+    summary: z.preprocess((v) => (v === null ? undefined : v), z.string().optional()),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     startTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
-    endTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
-    duration: z.coerce.number().int().positive().optional().default(60),
+    endTime: z.preprocess(
+      (v) => (v === null ? undefined : v),
+      z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional()
+    ),
+    duration: z.preprocess(
+      (v) => (v === null ? undefined : v),
+      z.coerce.number().int().positive().optional().default(60)
+    ),
     technicianId: z.number().int().positive(),
   })
   .refine((b) => b.endTime != null || b.duration != null, {
