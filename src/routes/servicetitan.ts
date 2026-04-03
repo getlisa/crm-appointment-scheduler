@@ -35,6 +35,24 @@ function normalizedRequestPayload(req: { body?: unknown }): unknown {
   return body?.arguments ?? body ?? {};
 }
 
+/** Vercel/patched `console` can crash in `util.inspect` when formatting some throws (e.g. `ZodError`). */
+function logRouteException(context: string, error: unknown): void {
+  if (error instanceof z.ZodError) {
+    console.error(context, JSON.stringify(error.flatten()));
+    return;
+  }
+  if (error instanceof Error) {
+    console.error(context, error.message);
+    if (error.stack) console.error(error.stack);
+    return;
+  }
+  try {
+    console.error(context, JSON.stringify(error));
+  } catch {
+    console.error(context, String(error));
+  }
+}
+
 const tenantIdField = z.preprocess(
   (value) => {
     if (value == null || value === '') return undefined;
@@ -621,7 +639,7 @@ serviceTitanRouter.post('/connect', async (req, res) => {
 
     return res.json({ success: true, message: 'ServiceTitan connected successfully' });
   } catch (error) {
-    console.error('[ServiceTitan] connect failed', error);
+    logRouteException('[ServiceTitan] connect failed', error);
     return res.status(400).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -673,7 +691,7 @@ serviceTitanRouter.post('/sync', async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[ServiceTitan] sync failed', error);
+    logRouteException('[ServiceTitan] sync failed', error);
     return res.status(400).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -689,7 +707,7 @@ serviceTitanRouter.post('/agent/match-technicians', async (req, res) => {
 
     return res.json({ success: true, data });
   } catch (error) {
-    console.error('[ServiceTitan] agent match-technicians failed', error);
+    logRouteException('[ServiceTitan] agent match-technicians failed', error);
     return res.status(400).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -703,7 +721,7 @@ serviceTitanRouter.get('/job-types/knowledge-base', async (req, res) => {
     const data = await loadJobTypesKnowledgeBase(query.tenantId);
     return res.json({ success: true, data });
   } catch (error) {
-    console.error('[ServiceTitan] job-types knowledge-base failed', error);
+    logRouteException('[ServiceTitan] job-types knowledge-base failed', error);
     return res.status(400).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -734,7 +752,7 @@ serviceTitanRouter.post('/agent/resolve-job-type', async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[ServiceTitan] agent resolve-job-type failed', error);
+    logRouteException('[ServiceTitan] agent resolve-job-type failed', error);
     return res.status(400).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -1039,7 +1057,7 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
     }
     return res.json({ success: true, data: result.data });
   } catch (error) {
-    console.error('[ServiceTitan] agent check-availability failed', error);
+    logRouteException('[ServiceTitan] agent check-availability failed', error);
     return res.status(400).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -1116,7 +1134,7 @@ serviceTitanRouter.post('/agent/check-availability-by-reason', async (req, res) 
       }),
     });
   } catch (error) {
-    console.error('[ServiceTitan] agent check-availability-by-reason failed', error);
+    logRouteException('[ServiceTitan] agent check-availability-by-reason failed', error);
     return res.status(400).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -1156,7 +1174,7 @@ serviceTitanRouter.post('/agent/resolve-customer-location', async (req, res) => 
       },
     });
   } catch (error) {
-    console.error('[ServiceTitan] agent resolve-customer-location failed', error);
+    logRouteException('[ServiceTitan] agent resolve-customer-location failed', error);
     return res.status(400).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -1247,7 +1265,7 @@ serviceTitanRouter.post('/agent/book', async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[ServiceTitan] agent book failed', error);
+    logRouteException('[ServiceTitan] agent book failed', error);
     return res.status(400).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
