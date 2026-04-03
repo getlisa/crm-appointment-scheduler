@@ -29,6 +29,12 @@ import type {
   ServiceTitanLocationApiModel,
 } from '../services/servicetitan/types.js';
 
+/** Retell / custom function runners often send fields under `body.arguments`; otherwise use root. */
+function normalizedRequestPayload(req: { body?: unknown }): unknown {
+  const body = req.body as { arguments?: unknown } | undefined;
+  return body?.arguments ?? body ?? {};
+}
+
 const tenantIdField = z.preprocess(
   (value) => {
     if (value == null || value === '') return undefined;
@@ -1043,7 +1049,8 @@ serviceTitanRouter.post('/agent/check-availability', async (req, res) => {
 
 serviceTitanRouter.post('/agent/check-availability-by-reason', async (req, res) => {
   try {
-    const body = checkAvailabilityByReasonBodySchema.parse(req.body);
+    const requestPayload = normalizedRequestPayload(req);
+    const body = checkAvailabilityByReasonBodySchema.parse(requestPayload);
     const { credentials } = await loadTenantCredentials(body.tenantId);
     const kb = await loadJobTypesKnowledgeBase(body.tenantId);
     const { matches } = resolveJobTypeFromReason(body.reason, kb, body.topN);
@@ -1159,7 +1166,8 @@ serviceTitanRouter.post('/agent/resolve-customer-location', async (req, res) => 
 
 serviceTitanRouter.post('/agent/book', async (req, res) => {
   try {
-    const body = bookAppointmentBodySchema.parse(req.body);
+    const requestPayload = normalizedRequestPayload(req);
+    const body = bookAppointmentBodySchema.parse(requestPayload);
     const { credentials, timezone: tenantTimezone } = await loadTenantCredentials(body.tenantId);
     const client = new ServiceTitanClient(credentials);
     const timeZone = tenantTimezone ?? 'UTC';
@@ -1201,7 +1209,7 @@ serviceTitanRouter.post('/agent/book', async (req, res) => {
       return res.status(400).json({ success: false, error: 'End must be after start' });
     }
 
-    const payload = buildServiceTitanJobsPayload({
+    const jobPayload = buildServiceTitanJobsPayload({
       customerId: resolved.customerId,
       locationId: resolved.locationId,
       businessUnitId: body.businessUnitId,
@@ -1214,7 +1222,7 @@ serviceTitanRouter.post('/agent/book', async (req, res) => {
       summary: body.summary,
     });
 
-    const raw = await client.bookJob(payload);
+    const raw = await client.bookJob(jobPayload);
     const job = raw as {
       id?: number;
       appointments?: { id?: number; start?: string; end?: string; technicianIds?: number[] }[];
