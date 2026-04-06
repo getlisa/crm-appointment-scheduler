@@ -2,10 +2,7 @@ import type {
   AvailabilitySlot,
   DailyTechnicianSchedule,
   TechnicianAvailability,
-  TechnicianScheduleItem,
 } from './types.js';
-
-const TRAVEL_BUFFER_MINUTES = 30;
 
 function addMinutes(isoDate: string, minutes: number): string {
   const d = new Date(isoDate);
@@ -102,10 +99,26 @@ export function computeDailyAvailability(params: {
         ? { start: technicianShiftStart, end: technicianShiftEnd }
         : { start: params.shiftStartIso, end: params.shiftEndIso };
 
-    const bufferedBusy: AvailabilitySlot[] = schedule.appointments.map((appointment: TechnicianScheduleItem) => ({
-      start: addMinutes(appointment.start, -TRAVEL_BUFFER_MINUTES),
-      end: addMinutes(appointment.end, TRAVEL_BUFFER_MINUTES),
-    }));
+    const busyEvents =
+      schedule.busyEvents.length > 0
+        ? schedule.busyEvents
+        : schedule.appointments.map((appointment) => ({
+            eventId: `legacy:${appointment.appointmentId}`,
+            start: appointment.start,
+            end: appointment.end,
+            status: appointment.status,
+            source: 'job_appointment' as const,
+            blocksBooking: true,
+            preBufferMinutes: 30,
+            postBufferMinutes: 30,
+          }));
+
+    const bufferedBusy: AvailabilitySlot[] = busyEvents
+      .filter((event) => event.blocksBooking)
+      .map((event) => ({
+        start: addMinutes(event.start, -event.preBufferMinutes),
+        end: addMinutes(event.end, event.postBufferMinutes),
+      }));
 
     const mergedBusy = mergeSlots(bufferedBusy);
     const freeSlots: AvailabilitySlot[] = [];

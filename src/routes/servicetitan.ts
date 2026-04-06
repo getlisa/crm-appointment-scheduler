@@ -767,6 +767,7 @@ function schedulesForTechnicianIds(schedule: DailyTechnicianSchedule[], technici
       byId.get(id) ?? {
         technicianId: id,
         technicianName: `Technician ${id}`,
+        busyEvents: [],
         appointments: [],
       }
   );
@@ -846,7 +847,7 @@ async function runAgentCheckAvailabilityCore(
 
   // 1) Specific date + time: verify window; suggest alternatives if it does not fit.
   if (body.date && body.startTime) {
-    const window = getUtcDayWindow(body.date, timeZone);
+    const window = getUtcDayWindow(body.date, 'UTC');
 
     const startUtc = localWallClockToUtcIso(body.date, normalizeTimeComponent(body.startTime), timeZone);
     if (!startUtc) {
@@ -882,7 +883,10 @@ async function runAgentCheckAvailabilityCore(
         Math.round((new Date(endUtc).getTime() - new Date(startUtc).getTime()) / 60_000)
     );
 
-    const schedule = await client.getDailyTechnicianSchedule(window);
+    const schedule = await client.getDailyTechnicianSchedule({
+      ...window,
+      technicianIds: body.technicianIds,
+    });
     const schedulesForCheck = schedulesForTechnicianIds(schedule, body.technicianIds);
 
     const check = computeAgentAvailabilityCheck({
@@ -925,8 +929,11 @@ async function runAgentCheckAvailabilityCore(
 
   // 2) Date only: openings that day (earliest + preview list per tech).
   if (body.date && !body.startTime) {
-    const window = getUtcDayWindow(body.date, timeZone);
-    const schedule = await client.getDailyTechnicianSchedule(window);
+    const window = getUtcDayWindow(body.date, 'UTC');
+    const schedule = await client.getDailyTechnicianSchedule({
+      ...window,
+      technicianIds: body.technicianIds,
+    });
     const schedulesForCheck = schedulesForTechnicianIds(schedule, body.technicianIds);
 
     const day = computeAgentDaySlotsMode({
@@ -975,8 +982,11 @@ async function runAgentCheckAvailabilityCore(
     aggregateShift
   );
 
-  const window = getUtcDayWindow(searchDate, timeZone);
-  const schedule = await client.getDailyTechnicianSchedule(window);
+  const window = getUtcDayWindow(searchDate, 'UTC');
+  const schedule = await client.getDailyTechnicianSchedule({
+    ...window,
+    technicianIds: body.technicianIds,
+  });
   const technicianNameById = new Map(schedule.map((s) => [s.technicianId, s.technicianName]));
   const schedulesForCheck = schedulesForTechnicianIds(schedule, body.technicianIds);
 

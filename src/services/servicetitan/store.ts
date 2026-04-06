@@ -5,6 +5,7 @@ import { normalizeJobTypeUnknown } from './job-type-normalize.js';
 import type { NormalizedJobType } from './job-type-normalize.js';
 import type {
   DailyTechnicianSchedule,
+  TechnicianBusyEvent,
   TechnicianScheduleItem,
   ServiceTitanAppointmentApiModel,
   ServiceTitanAssignmentApiModel,
@@ -410,7 +411,10 @@ export async function getCachedDailySchedule(params: {
     (technicians ?? []).map((technician) => [technician.technician_id, technician.name ?? null])
   );
 
-  const scheduleMap = new Map<string, { technicianName: string; appointments: TechnicianScheduleItem[] }>();
+  const scheduleMap = new Map<
+    string,
+    { technicianName: string; appointments: TechnicianScheduleItem[]; busyEvents: TechnicianBusyEvent[] }
+  >();
   (assignments ?? []).forEach((assignment) => {
     const appointment = appointmentsById.get(assignment.appointment_id);
     if (!appointment?.start || !appointment?.end) return;
@@ -420,14 +424,30 @@ export async function getCachedDailySchedule(params: {
       ({
         technicianName: technicianNameById.get(assignment.technician_id) ?? `Technician ${techId}`,
         appointments: [],
-      } as { technicianName: string; appointments: TechnicianScheduleItem[] });
+        busyEvents: [],
+      } as {
+        technicianName: string;
+        appointments: TechnicianScheduleItem[];
+        busyEvents: TechnicianBusyEvent[];
+      });
     existing.appointments.push(appointment);
+    existing.busyEvents.push({
+      eventId: `job:${appointment.appointmentId}`,
+      start: appointment.start,
+      end: appointment.end,
+      status: appointment.status,
+      source: 'job_appointment',
+      blocksBooking: true,
+      preBufferMinutes: 30,
+      postBufferMinutes: 30,
+    });
     scheduleMap.set(techId, existing);
   });
 
   return Array.from(scheduleMap.entries()).map(([technicianId, value]) => ({
     technicianId,
     technicianName: value.technicianName,
+    busyEvents: value.busyEvents.sort((a, b) => a.start.localeCompare(b.start)),
     appointments: value.appointments.sort((a: any, b: any) => a.start.localeCompare(b.start)),
   }));
 }

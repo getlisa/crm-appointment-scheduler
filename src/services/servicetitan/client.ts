@@ -1,6 +1,7 @@
 import { env } from '../../config/env.js';
 import type {
   DailyTechnicianSchedule,
+  TechnicianBusyEvent,
   ServiceTitanAppointmentApiModel,
   ServiceTitanAssignmentApiModel,
   ServiceTitanAuthCredentials,
@@ -14,6 +15,55 @@ import type {
 } from './types.js';
 
 export class ServiceTitanClient {
+  private coerceIsoString(value: unknown): string | null {
+    if (typeof value !== 'string' || value.trim() === '') return null;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString();
+  }
+
+  private coerceNumber(value: unknown): number | null {
+    const n = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(n)) return null;
+    return n;
+  }
+
+  private normalizeNonJobAppointmentWindow(
+    raw: Record<string, unknown>,
+    fallbackDayEndUtc: string
+  ): { start: string; end: string } | null {
+    const start =
+      this.coerceIsoString(raw.start) ??
+      this.coerceIsoString(raw.startsOn) ??
+      this.coerceIsoString(raw.startTime) ??
+      this.coerceIsoString(raw.from) ??
+      null;
+    if (!start) return null;
+
+    const explicitEnd =
+      this.coerceIsoString(raw.end) ??
+      this.coerceIsoString(raw.endsOn) ??
+      this.coerceIsoString(raw.endTime) ??
+      this.coerceIsoString(raw.to) ??
+      null;
+    if (explicitEnd && explicitEnd > start) {
+      return { start, end: explicitEnd };
+    }
+
+    const durationMinutes =
+      this.coerceNumber(raw.durationMinutes) ??
+      this.coerceNumber(raw.durationInMinutes) ??
+      this.coerceNumber(raw.durationMins) ??
+      this.coerceNumber(raw.duration);
+    if (durationMinutes && durationMinutes > 0) {
+      const end = new Date(new Date(start).getTime() + durationMinutes * 60_000).toISOString();
+      if (end > start) return { start, end };
+    }
+
+    // Some non-job payloads omit an end; treat as blocked until UTC day-end of query window.
+    return fallbackDayEndUtc > start ? { start, end: fallbackDayEndUtc } : null;
+  }
+
   private readonly authBaseUrl: string;
   private readonly apiBaseUrl: string;
   private accessToken?: string;
@@ -329,6 +379,7 @@ export class ServiceTitanClient {
   async getAppointmentsForWindow(params: {
     startsOnOrAfter: string;
     startsBefore: string;
+    technicianId?: number;
     pageSize?: number;
   }): Promise<ServiceTitanAppointmentApiModel[]> {
     const response = await this.apiRequest<ServiceTitanPagedResponse<ServiceTitanAppointmentApiModel>>(
@@ -337,12 +388,66 @@ export class ServiceTitanClient {
         active: true,
         startsOnOrAfter: params.startsOnOrAfter,
         startsBefore: params.startsBefore,
+        technicianId: params.technicianId,
         pageSize: params.pageSize ?? 500,
       }
     );
     const appointments = response.data ?? [];
     console.log('[ServiceTitan] Appointments fetched', { count: appointments.length });
     return appointments;
+  }
+
+  async getNonJobAppointmentsForWindow(params: {
+    startsOnOrAfter: string;
+    startsOnOrBefore: string;
+    technicianId: number;
+    pageSize?: number;
+  }): Promise<Record<string, unknown>[]> {
+    const pageSize = params.pageSize ?? 500;
+    const all: Record<string, unknown>[] = [];
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      const response = await this.apiRequest<
+        ServiceTitanPagedResponse<Record<string, unknown>>
+      >(`/dispatch/v2/tenant/${this.credentials.tenantId}/non-job-appointments`, {
+        includeTotal: true,
+        activeOnly: true,
+        technicianId: params.technicianId,
+        startsOnOrAfter: params.startsOnOrAfter,
+        startsOnOrBefore: params.startsOnOrBefore,
+        page,
+        pageSize,
+      });
+      const batch = response.data ?? [];
+      all.push(...batch);
+      hasMore = Boolean(response.hasMore && batch.length > 0);
+      page += 1;
+      if (page > 100) {
+        console.warn('[ServiceTitan] non-job appointments pagination safety stop at page 100', {
+          technicianId: params.technicianId,
+        });
+        break;
+      }
+    }
+    console.log('[ServiceTitan] Non-job appointments fetched', {
+      technicianId: params.technicianId,
+      count: all.length,
+    });
+    if (all.length > 0) {
+      console.log('[ServiceTitan] Non-job appointments details', {
+        technicianId: params.technicianId,
+        events: all.map((event) => ({
+          id: event.id ?? null,
+          start: event.start ?? event.startsOn ?? event.startTime ?? null,
+          end: event.end ?? event.endsOn ?? event.endTime ?? null,
+          status: event.status ?? null,
+          durationMinutes:
+            event.durationMinutes ?? event.durationInMinutes ?? event.durationMins ?? event.duration ?? null,
+        })),
+      });
+    }
+    return all;
   }
 
   async getAssignmentsByAppointmentIds(appointmentIds: number[]): Promise<ServiceTitanAssignmentApiModel[]> {
@@ -367,37 +472,100 @@ export class ServiceTitanClient {
   async getDailyTechnicianSchedule(params: {
     startsOnOrAfter: string;
     startsBefore: string;
+    technicianIds?: string[];
   }): Promise<DailyTechnicianSchedule[]> {
-    const [technicians, appointments] = await Promise.all([
-      this.getTechnicians(),
-      this.getAppointmentsForWindow(params),
-    ]);
-
-    const assignments = await this.getAssignmentsByAppointmentIds(appointments.map((a) => a.id));
-    const appointmentsById = new Map<number, ServiceTitanAppointmentApiModel>(
-      appointments.map((appointment) => [appointment.id, appointment])
-    );
-    const technicianById = new Map<number, ServiceTitanTechnicianApiModel>(
-      technicians.map((tech) => [tech.id, tech])
-    );
-
-    const scheduleMap = new Map<number, TechnicianScheduleItem[]>();
-    assignments.forEach((assignment) => {
-      const appointment = appointmentsById.get(assignment.appointmentId);
-      if (!appointment?.start || !appointment?.end) return;
-      const existing = scheduleMap.get(assignment.technicianId) ?? [];
-      existing.push({
-        appointmentId: appointment.id,
-        start: appointment.start,
-        end: appointment.end,
-        status: appointment.status,
-      });
-      scheduleMap.set(assignment.technicianId, existing);
+    const technicians = await this.getTechnicians();
+    const requestedTechnicianIds = new Set((params.technicianIds ?? []).map((id) => String(id)));
+    const techniciansForSchedule =
+      requestedTechnicianIds.size > 0
+        ? technicians.filter((tech) => requestedTechnicianIds.has(String(tech.id)))
+        : technicians;
+    console.log('[ServiceTitan] Schedule technicians selected', {
+      requestedTechnicianIds: Array.from(requestedTechnicianIds),
+      selectedTechnicianIds: techniciansForSchedule.map((tech) => String(tech.id)),
+      selectedCount: techniciansForSchedule.length,
     });
+    const nonJobUtcDay = (() => {
+      const source = new Date(params.startsOnOrAfter);
+      if (Number.isNaN(source.getTime())) {
+        return {
+          startsOnOrAfter: params.startsOnOrAfter,
+          startsOnOrBefore: params.startsBefore,
+        };
+      }
+      const ymd = source.toISOString().slice(0, 10);
+      return {
+        startsOnOrAfter: `${ymd}T00:00:00Z`,
+        startsOnOrBefore: `${ymd}T23:59:59Z`,
+      };
+    })();
+    const byTechFetch = await Promise.all(
+      techniciansForSchedule.map(async (tech) => {
+        const [jobAppointments, nonJobAppointments] = await Promise.all([
+          this.getAppointmentsForWindow({
+            startsOnOrAfter: params.startsOnOrAfter,
+            startsBefore: params.startsBefore,
+            technicianId: tech.id,
+          }),
+          this.getNonJobAppointmentsForWindow({
+            startsOnOrAfter: nonJobUtcDay.startsOnOrAfter,
+            startsOnOrBefore: nonJobUtcDay.startsOnOrBefore,
+            technicianId: tech.id,
+          }),
+        ]);
+        return [tech.id, { jobAppointments, nonJobAppointments }] as const;
+      })
+    );
+    const jobsByTechId = new Map<number, ServiceTitanAppointmentApiModel[]>(
+      byTechFetch.map(([id, data]) => [id, data.jobAppointments])
+    );
+    const nonJobByTechId = new Map<number, Record<string, unknown>[]>(
+      byTechFetch.map(([id, data]) => [id, data.nonJobAppointments])
+    );
 
-    return technicians
+    return techniciansForSchedule
       .map((technician) => {
-        const techAppointments = scheduleMap.get(technician.id) ?? [];
+        const techAppointments: TechnicianScheduleItem[] = (jobsByTechId.get(technician.id) ?? [])
+          .filter((appointment) => Boolean(appointment.start) && Boolean(appointment.end))
+          .map((appointment) => ({
+            appointmentId: appointment.id,
+            start: appointment.start as string,
+            end: appointment.end as string,
+            status: appointment.status,
+          }));
+        const busyFromJobs: TechnicianBusyEvent[] = techAppointments
+          .filter((appointment) => Boolean(appointment.start) && Boolean(appointment.end))
+          .map((appointment) => ({
+            eventId: `job:${appointment.appointmentId}`,
+            start: appointment.start,
+            end: appointment.end,
+            status: appointment.status,
+            source: 'job_appointment' as const,
+            blocksBooking: true,
+            preBufferMinutes: 30,
+            postBufferMinutes: 30,
+          }));
+        const busyFromNonJobs: TechnicianBusyEvent[] = [];
+        for (const appointment of nonJobByTechId.get(technician.id) ?? []) {
+          const window = this.normalizeNonJobAppointmentWindow(
+            appointment,
+            nonJobUtcDay.startsOnOrBefore
+          );
+          if (!window) continue;
+          busyFromNonJobs.push({
+            eventId: `nonjob:${appointment.id ?? `${technician.id}:${window.start}`}`,
+            start: window.start,
+            end: window.end,
+            status: (appointment.status as string | undefined) ?? undefined,
+            source: 'non_job_appointment',
+            blocksBooking: true,
+            preBufferMinutes: 0,
+            postBufferMinutes: 0,
+          });
+        }
+        const busyEvents = [...busyFromJobs, ...busyFromNonJobs].sort((a, b) =>
+          a.start.localeCompare(b.start)
+        );
         return {
           technicianId: String(technician.id),
           technicianName: technician.name ?? `Technician ${technician.id}`,
@@ -406,6 +574,7 @@ export class ServiceTitanClient {
           bio: technician.bio,
           positions: technician.positions ?? [],
           skills: technician.skills ?? [],
+          busyEvents,
           appointments: techAppointments.sort((a, b) => a.start.localeCompare(b.start)),
         };
       })

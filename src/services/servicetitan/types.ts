@@ -92,6 +92,19 @@ export type TechnicianScheduleItem = {
   status?: string;
 };
 
+export type TechnicianBusyEventSource = 'job_appointment' | 'non_job_appointment';
+
+export type TechnicianBusyEvent = {
+  eventId: string;
+  start: string;
+  end: string;
+  status?: string;
+  source: TechnicianBusyEventSource;
+  blocksBooking: boolean;
+  preBufferMinutes: number;
+  postBufferMinutes: number;
+};
+
 export type DailyTechnicianSchedule = {
   technicianId: string;
   technicianName: string;
@@ -100,6 +113,9 @@ export type DailyTechnicianSchedule = {
   bio?: string;
   positions?: string[];
   skills?: { id: number; name: string }[];
+  /** Normalized busy windows from job + non-job appointment sources. */
+  busyEvents: TechnicianBusyEvent[];
+  /** Legacy fallback retained for compatibility with cached schedule readers. */
   appointments: TechnicianScheduleItem[];
 };
 
