@@ -357,8 +357,8 @@ export async function loadJobTypesKnowledgeBase(tenantId: number): Promise<Retel
       code: string | null;
       summary: string | null;
       duration_seconds: number | null;
-      skills: string[];
-      intent_hints: string[] | null;
+      skills: unknown[];
+      intent_hints: unknown[] | null;
       priority: string | null;
       business_unit_id: number | null;
     }[],

@@ -19,6 +19,16 @@ export type RetellJobTypesKnowledgeBase = {
   jobTypes: RetellJobTypeKbRow[];
 };
 
+/** Safely extract a string from a skill entry that may be a plain string or an `{id, name}` object. */
+function coerceSkillToString(s: unknown): string {
+  if (typeof s === 'string') return s;
+  if (s && typeof s === 'object') {
+    const name = (s as Record<string, unknown>).name;
+    if (typeof name === 'string') return name;
+  }
+  return '';
+}
+
 export function buildKnowledgeBaseDocument(params: {
   tenantId: number;
   rows: {
@@ -27,14 +37,19 @@ export function buildKnowledgeBaseDocument(params: {
     code: string | null;
     summary: string | null;
     duration_seconds: number | null;
-    skills: string[];
-    intent_hints: string[] | null;
+    skills: unknown[];
+    intent_hints: unknown[] | null;
     priority: string | null;
     business_unit_id: number | null;
   }[];
 }): RetellJobTypesKnowledgeBase {
   const jobTypes: RetellJobTypeKbRow[] = params.rows.map((r) => {
-    const skills = Array.isArray(r.skills) ? (r.skills as string[]) : [];
+    const rawSkills = Array.isArray(r.skills) ? r.skills : [];
+    const skills: string[] = rawSkills.map(coerceSkillToString).filter(Boolean);
+    const rawHints = Array.isArray(r.intent_hints) ? r.intent_hints : [];
+    const intentHints: string[] = rawHints
+      .map((h) => (typeof h === 'string' ? h : String(h ?? '')))
+      .filter(Boolean);
     const ds = r.duration_seconds;
     const durationMinutes =
       ds != null && Number.isFinite(ds) ? Math.max(1, Math.ceil(ds / 60)) : null;
@@ -46,8 +61,8 @@ export function buildKnowledgeBaseDocument(params: {
       durationSeconds: ds,
       durationMinutes,
       skills,
-      skillNames: skills.filter(Boolean),
-      intentHints: r.intent_hints ?? [],
+      skillNames: skills,
+      intentHints,
       priority: r.priority ?? null,
       businessUnitId:
         r.business_unit_id != null && Number.isFinite(Number(r.business_unit_id))
@@ -63,7 +78,8 @@ export function buildKnowledgeBaseDocument(params: {
   };
 }
 
-function tokenize(s: string): Set<string> {
+function tokenize(s: unknown): Set<string> {
+  if (typeof s !== 'string') return new Set();
   return new Set(
     s
       .toLowerCase()
@@ -86,6 +102,7 @@ export function scoreJobTypeMatch(reason: string, row: RetellJobTypeKbRow): numb
   ].filter(Boolean) as string[];
 
   for (const field of fields) {
+    if (typeof field !== 'string') continue;
     const ft = tokenize(field);
     for (const t of tokens) {
       if (ft.has(t)) score += 3;
@@ -94,6 +111,7 @@ export function scoreJobTypeMatch(reason: string, row: RetellJobTypeKbRow): numb
   }
 
   for (const hint of row.intentHints) {
+    if (typeof hint !== 'string') continue;
     if (reason.toLowerCase().includes(hint.toLowerCase())) score += 5;
   }
 
