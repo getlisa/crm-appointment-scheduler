@@ -28,6 +28,26 @@ export class ServiceTitanClient {
     return n;
   }
 
+  /** Parse an HH:MM:SS or HH:MM time string to total minutes (e.g. '02:00:00' → 120). */
+  private parseTimeStringToMinutes(value: unknown): number | null {
+    if (typeof value !== 'string') return null;
+    const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
+    if (!m) return null;
+    const hours = Number(m[1]);
+    const minutes = Number(m[2]);
+    const totalMinutes = hours * 60 + minutes;
+    return totalMinutes > 0 ? totalMinutes : null;
+  }
+
+  /**
+   * Emergency slots are held open for urgent bookings and should not block availability.
+   * Detected by `name` containing "emergency" (case-insensitive).
+   */
+  private isNonJobEmergencySlot(raw: Record<string, unknown>): boolean {
+    const name = typeof raw.name === 'string' ? raw.name : '';
+    return /emergency/i.test(name);
+  }
+
   private normalizeNonJobAppointmentWindow(
     raw: Record<string, unknown>,
     fallbackDayEndUtc: string
@@ -50,13 +70,14 @@ export class ServiceTitanClient {
       return { start, end: explicitEnd };
     }
 
-    const durationMinutes =
-      this.coerceNumber(raw.durationMinutes) ??
-      this.coerceNumber(raw.durationInMinutes) ??
-      this.coerceNumber(raw.durationMins) ??
-      this.coerceNumber(raw.duration);
-    if (durationMinutes && durationMinutes > 0) {
-      const end = new Date(new Date(start).getTime() + durationMinutes * 60_000).toISOString();
+    const durationFields = [raw.durationMinutes, raw.durationInMinutes, raw.durationMins, raw.duration];
+    let resolvedDurationMinutes: number | null = null;
+    for (const field of durationFields) {
+      resolvedDurationMinutes = this.coerceNumber(field) ?? this.parseTimeStringToMinutes(field);
+      if (resolvedDurationMinutes != null) break;
+    }
+    if (resolvedDurationMinutes && resolvedDurationMinutes > 0) {
+      const end = new Date(new Date(start).getTime() + resolvedDurationMinutes * 60_000).toISOString();
       if (end > start) return { start, end };
     }
 
@@ -547,6 +568,7 @@ export class ServiceTitanClient {
           }));
         const busyFromNonJobs: TechnicianBusyEvent[] = [];
         for (const appointment of nonJobByTechId.get(technician.id) ?? []) {
+          if (this.isNonJobEmergencySlot(appointment)) continue;
           const window = this.normalizeNonJobAppointmentWindow(
             appointment,
             nonJobUtcDay.startsOnOrBefore

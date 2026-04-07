@@ -167,6 +167,7 @@ Because non-job payloads can vary:
 - end can come from (tried in order): `end` | `endsOn` | `endTime` | `to`
 - if no valid end (or end <= start):
   - try duration fields (tried in order): `durationMinutes` | `durationInMinutes` | `durationMins` | `duration`
+  - each field is tried first as a numeric minute count, then as an `HH:MM:SS` or `HH:MM` time string (e.g. `'02:00:00'` → 120 minutes)
   - if duration > 0, compute end = start + duration minutes
   - else fallback to queried UTC day end (`startsOnOrBefore` value)
 - if no valid start at all, the event is **skipped entirely** (returns null)
