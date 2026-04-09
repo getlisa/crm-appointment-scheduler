@@ -150,6 +150,7 @@ Important current behavior:
 - For each selected technician, in **parallel** (`Promise.all`):
   - fetch job appointments via JPM appointments endpoint with `technicianId`
     - uses `startsOnOrAfter` and `startsBefore` (exclusive upper bound)
+    - response fields captured: `id`, `start`, `end`, `arrivalWindowStart`, `arrivalWindowEnd`, `duration` (seconds), `status`
   - fetch non-job appointments via dispatch non-job endpoint with `technicianId`
     - uses `startsOnOrAfter` and `startsOnOrBefore` (inclusive upper bound, different param name than jobs)
 - Job appointment query window comes from `getUtcDayWindow(date, 'UTC')` which produces **UTC midnight-to-midnight** bounds (not tenant-local midnight)
@@ -158,6 +159,17 @@ Important current behavior:
   - `startsOnOrBefore: YYYY-MM-DDT23:59:59Z`
 - Non-job endpoint paginates (safety stop at page 100); job types paginate with safety stop at page 100
 - Results are sorted alphabetically by technician name
+
+### Job appointment busy window computation (critical)
+
+For each job appointment, the busy window is computed dynamically rather than blindly using the raw `start`/`end`:
+
+1. **Busy start** = `arrivalWindowStart` (preferred) → fallback to `start`
+2. **Busy end** (tried in priority order):
+   - if `arrivalWindowStart` and `duration` (seconds, > 0) are both present: `arrivalWindowStart + duration`
+   - else if `arrivalWindowEnd` is present: use `arrivalWindowEnd`
+   - else: fallback to `end`
+3. **Status-based filtering**: appointments with status `"Done"`, `"Completed"`, `"Canceled"`, or `"Cancelled"` are marked `blocksBooking: false`, meaning they still appear in the schedule but do **not** block availability slots. This handles early finishes, cancellations, and completed jobs that the technician is already done with.
 
 ### Non-job event normalization (critical)
 
@@ -182,6 +194,9 @@ Busy event model:
 - each event has buffer policy:
   - jobs: `pre=30 min`, `post=30 min`
   - non-jobs: `pre=0`, `post=0`
+- `blocksBooking` flag per event:
+  - job appointments with a non-blocking status (`Done`, `Completed`, `Canceled`, `Cancelled`) have `blocksBooking: false` — they are excluded from the busy-to-free computation
+  - all other job appointments and all non-job appointments have `blocksBooking: true`
 - legacy fallback: if `busyEvents` array is empty, `availability.ts` reconstructs busy events from the `appointments` array (with job buffers), ensuring backward compatibility with older cached schedule data
 
 Slot engine (`availability.ts`):

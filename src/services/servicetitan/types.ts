@@ -70,8 +70,24 @@ export type ServiceTitanAppointmentApiModel = {
   id: number;
   start?: string;
   end?: string;
+  arrivalWindowStart?: string;
+  arrivalWindowEnd?: string;
+  /** Job-type duration in seconds (from the associated job type). */
+  duration?: number;
+  /**
+   * Appointment lifecycle status from ServiceTitan.
+   * Common values: "Scheduled", "Dispatched", "Working", "Done", "Canceled", "Hold".
+   */
   status?: string;
 };
+
+/** Statuses that indicate the appointment is finished or no longer active. */
+export const APPOINTMENT_NON_BLOCKING_STATUSES = new Set([
+  'Done',
+  'Completed',
+  'Canceled',
+  'Cancelled',
+]);
 
 export type ServiceTitanAssignmentApiModel = {
   id?: number;
@@ -89,6 +105,9 @@ export type TechnicianScheduleItem = {
   appointmentId: number;
   start: string;
   end: string;
+  arrivalWindowStart?: string;
+  arrivalWindowEnd?: string;
+  duration?: number;
   status?: string;
 };
 
@@ -108,6 +127,8 @@ export type TechnicianBusyEvent = {
 export type DailyTechnicianSchedule = {
   technicianId: string;
   technicianName: string;
+  email?: string;
+  phoneNumber?: string;
   shiftStart?: string;
   shiftEnd?: string;
   bio?: string;

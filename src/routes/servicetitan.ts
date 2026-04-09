@@ -899,6 +899,7 @@ async function runAgentCheckAvailabilityCore(
       requestEndUtc: endUtc,
     });
 
+    const schedByTechId = new Map(schedulesForCheck.map((s) => [s.technicianId, s]));
     const globalRaw = check.globalEarliestAlternativeUtc;
 
     return {
@@ -912,13 +913,18 @@ async function runAgentCheckAvailabilityCore(
           start: toClientTime(startUtc, timeZone),
           end: toClientTime(endUtc, timeZone),
         },
-        technicians: check.technicians.map((t) => ({
-          technicianId: t.technicianId,
-          technicianName: t.technicianName,
-          fitsRequest: t.fitsRequest,
-          ...(t.doesNotFitReason ? { doesNotFitReason: t.doesNotFitReason } : {}),
-          earliestAlternative: localizeWin(t.earliestAlternativeUtc ?? null),
-        })),
+        technicians: check.technicians.map((t) => {
+          const sched = schedByTechId.get(t.technicianId);
+          return {
+            technicianId: t.technicianId,
+            technicianName: t.technicianName,
+            fitsRequest: t.fitsRequest,
+            ...(t.fitsRequest && sched?.email ? { email: sched.email } : {}),
+            ...(t.fitsRequest && sched?.phoneNumber ? { phoneNumber: sched.phoneNumber } : {}),
+            ...(t.doesNotFitReason ? { doesNotFitReason: t.doesNotFitReason } : {}),
+            earliestAlternative: localizeWin(t.earliestAlternativeUtc ?? null),
+          };
+        }),
         globalEarliestAlternative:
           globalRaw && localizeWin(globalRaw)
             ? { technicianId: globalRaw.technicianId, ...localizeWin(globalRaw)! }
@@ -946,6 +952,7 @@ async function runAgentCheckAvailabilityCore(
       slotPreviewLimit: body.slotPreviewLimit,
     });
 
+    const schedByTechId = new Map(schedulesForCheck.map((s) => [s.technicianId, s]));
     const globalRaw = day.globalEarliestUtc;
 
     return {
@@ -956,13 +963,18 @@ async function runAgentCheckAvailabilityCore(
         timeZone,
         durationMinutes: body.duration,
         requestedWindow: null,
-        technicians: day.technicians.map((t) => ({
-          technicianId: t.technicianId,
-          technicianName: t.technicianName,
-          hasAvailability: t.hasAvailability,
-          earliestSlot: localizeWin(t.earliestSlotUtc),
-          slotsPreview: t.slotsPreviewUtc.map((w) => localizeWin(w)!),
-        })),
+        technicians: day.technicians.map((t) => {
+          const sched = schedByTechId.get(t.technicianId);
+          return {
+            technicianId: t.technicianId,
+            technicianName: t.technicianName,
+            hasAvailability: t.hasAvailability,
+            ...(t.hasAvailability && sched?.email ? { email: sched.email } : {}),
+            ...(t.hasAvailability && sched?.phoneNumber ? { phoneNumber: sched.phoneNumber } : {}),
+            earliestSlot: localizeWin(t.earliestSlotUtc),
+            slotsPreview: t.slotsPreviewUtc.map((w) => localizeWin(w)!),
+          };
+        }),
         globalEarliestSlot:
           globalRaw && localizeWin(globalRaw)
             ? { technicianId: globalRaw.technicianId, ...localizeWin(globalRaw)! }
@@ -1032,10 +1044,14 @@ async function runAgentCheckAvailabilityCore(
         const name = technicianNameById.get(id) ?? `Technician ${id}`;
         const row = dayById.get(id);
         const slot = row?.earliestSlotUtc;
+        const sched = schedulesForCheck.find((s) => s.technicianId === id);
+        const hasAvail = Boolean(slot);
         return {
           technicianId: id,
           technicianName: name,
-          hasAvailability: Boolean(slot),
+          hasAvailability: hasAvail,
+          ...(hasAvail && sched?.email ? { email: sched.email } : {}),
+          ...(hasAvail && sched?.phoneNumber ? { phoneNumber: sched.phoneNumber } : {}),
           earliestSlot: slot
             ? {
                 date: searchDate,

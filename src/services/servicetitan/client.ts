@@ -1,17 +1,18 @@
 import { env } from '../../config/env.js';
-import type {
-  DailyTechnicianSchedule,
-  TechnicianBusyEvent,
-  ServiceTitanAppointmentApiModel,
-  ServiceTitanAssignmentApiModel,
-  ServiceTitanAuthCredentials,
-  ServiceTitanCustomerApiModel,
-  ServiceTitanJobTypeApiModel,
-  ServiceTitanLocationApiModel,
-  ServiceTitanPagedResponse,
-  ServiceTitanTechnicianApiModel,
-  ServiceTitanEnvironment,
-  TechnicianScheduleItem,
+import {
+  APPOINTMENT_NON_BLOCKING_STATUSES,
+  type DailyTechnicianSchedule,
+  type TechnicianBusyEvent,
+  type ServiceTitanAppointmentApiModel,
+  type ServiceTitanAssignmentApiModel,
+  type ServiceTitanAuthCredentials,
+  type ServiceTitanCustomerApiModel,
+  type ServiceTitanJobTypeApiModel,
+  type ServiceTitanLocationApiModel,
+  type ServiceTitanPagedResponse,
+  type ServiceTitanTechnicianApiModel,
+  type ServiceTitanEnvironment,
+  type TechnicianScheduleItem,
 } from './types.js';
 
 export class ServiceTitanClient {
@@ -415,6 +416,19 @@ export class ServiceTitanClient {
     );
     const appointments = response.data ?? [];
     console.log('[ServiceTitan] Appointments fetched', { count: appointments.length });
+    if (appointments.length > 0) {
+      console.log('[ServiceTitan] Job appointments details', {
+        events: appointments.map((a) => ({
+          id: a.id,
+          start: a.start ?? null,
+          end: a.end ?? null,
+          arrivalWindowStart: a.arrivalWindowStart ?? null,
+          arrivalWindowEnd: a.arrivalWindowEnd ?? null,
+          duration: a.duration ?? null,
+          status: a.status ?? null,
+        })),
+      });
+    }
     return appointments;
   }
 
@@ -552,20 +566,42 @@ export class ServiceTitanClient {
             appointmentId: appointment.id,
             start: appointment.start as string,
             end: appointment.end as string,
+            arrivalWindowStart: appointment.arrivalWindowStart,
+            arrivalWindowEnd: appointment.arrivalWindowEnd,
+            duration: appointment.duration,
             status: appointment.status,
           }));
         const busyFromJobs: TechnicianBusyEvent[] = techAppointments
           .filter((appointment) => Boolean(appointment.start) && Boolean(appointment.end))
-          .map((appointment) => ({
-            eventId: `job:${appointment.appointmentId}`,
-            start: appointment.start,
-            end: appointment.end,
-            status: appointment.status,
-            source: 'job_appointment' as const,
-            blocksBooking: true,
-            preBufferMinutes: 30,
-            postBufferMinutes: 30,
-          }));
+          .map((appointment) => {
+            const isNonBlocking =
+              typeof appointment.status === 'string' &&
+              APPOINTMENT_NON_BLOCKING_STATUSES.has(appointment.status);
+
+            const busyStart = appointment.arrivalWindowStart ?? appointment.start;
+            let busyEnd = appointment.end;
+            if (appointment.arrivalWindowStart && appointment.duration && appointment.duration > 0) {
+              const computed = new Date(
+                new Date(appointment.arrivalWindowStart).getTime() + appointment.duration * 1000
+              );
+              if (!Number.isNaN(computed.getTime())) {
+                busyEnd = computed.toISOString();
+              }
+            } else if (appointment.arrivalWindowEnd) {
+              busyEnd = appointment.arrivalWindowEnd;
+            }
+
+            return {
+              eventId: `job:${appointment.appointmentId}`,
+              start: busyStart,
+              end: busyEnd,
+              status: appointment.status,
+              source: 'job_appointment' as const,
+              blocksBooking: !isNonBlocking,
+              preBufferMinutes: 30,
+              postBufferMinutes: 30,
+            };
+          });
         const busyFromNonJobs: TechnicianBusyEvent[] = [];
         for (const appointment of nonJobByTechId.get(technician.id) ?? []) {
           if (this.isNonJobEmergencySlot(appointment)) continue;
@@ -591,6 +627,8 @@ export class ServiceTitanClient {
         return {
           technicianId: String(technician.id),
           technicianName: technician.name ?? `Technician ${technician.id}`,
+          email: technician.email,
+          phoneNumber: technician.phoneNumber ?? technician.mobilePhone,
           shiftStart: technician.shiftStart,
           shiftEnd: technician.shiftEnd,
           bio: technician.bio,
