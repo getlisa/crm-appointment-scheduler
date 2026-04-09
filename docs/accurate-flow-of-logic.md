@@ -124,9 +124,10 @@ Logic:
    - for each required skill `req` and each technician skill `name`: `name.includes(req) || req.includes(name)`
    - this means "HVAC" matches "HVAC Repair" and vice versa
 3. retain technicians satisfying **all** required skills (`.every()`)
-4. if zero technicians match AND `SERVICETITAN_FALLBACK_TECHNICIAN_ID` env is set:
+4. if zero technicians match AND a fallback technician is configured (tenant-level `fallback_technician_id` in `servicetitan_tenants`, or global `SERVICETITAN_FALLBACK_TECHNICIAN_ID` env):
    - inject a single fallback technician with `usedFallback: true` and empty `matchedSkills`
-   - log a warning when fallback is used
+   - tenant-level value takes priority over the env var
+   - log a warning when fallback is used (including the source: `tenant_config` or `env`)
 
 Output per technician:
 
@@ -313,7 +314,7 @@ Booking flow internals:
 3. validate end > start
 4. build ServiceTitan JPM payload via `buildServiceTitanJobsPayload`:
    - all IDs are stringified for the API (`customerId`, `locationId`, `businessUnitId`, `jobTypeId`, `technicianIds`)
-   - includes `campaignId` from `SERVICETITAN_CAMPAIGN_ID` env variable
+   - includes `campaignId` resolved from tenant-level `campaign_id` in `servicetitan_tenants` (preferred) or global `SERVICETITAN_CAMPAIGN_ID` env (fallback); returns 400 if neither is set
    - sets `arrivalWindowStart` and `arrivalWindowEnd` to the appointment start/end UTC
    - sets `summary` to provided value or defaults to `"Scheduled appointment"` if empty/omitted
 5. POST to ServiceTitan JPM `/jobs` endpoint
@@ -330,7 +331,7 @@ Booking flow internals:
 
 Tables involved:
 
-- `servicetitan_tenants` - tenant credentials (`client_id`, `client_secret`, `app_key`) and `timezone` (IANA string)
+- `servicetitan_tenants` - tenant credentials (`client_id`, `client_secret`, `app_key`), `timezone` (IANA string), `campaign_id` (booking campaign, optional), `fallback_technician_id` (last-resort tech, optional)
 - `servicetitan_technicians` - skill matching source; stores `skills` (JSON array of `{ id, name }`), `shift_start`, `shift_end`, `bio`, `positions`, `permissions`
 - `servicetitan_job_types` - issue-to-job-type knowledge base; stores `name`, `code`, `summary`, `duration_seconds`, `skills`, `priority`, `business_unit_id`, `intent_hints`
 - `servicetitan_customers` - customer resolution cache; stores `normalized_phone` (digits-only) for lookup, plus full address fields
@@ -369,7 +370,7 @@ This separation avoids mixed-timezone drift and keeps end-user output readable.
 - `check-availability-by-reason` accepts either `startTime` or `time` (not both); providing both returns a Zod validation error.
 - `slotPreviewLimit=0` means uncapped up to hard safety cap of **2000** per technician (`MAX_SLOTS_PREVIEW_PER_TECH`).
 - Slot expansion produces consecutive non-overlapping windows of `durationMinutes` within each free gap, stepped by the duration itself (back-to-back, no overlap).
-- Fallback technician is optional and controlled by `SERVICETITAN_FALLBACK_TECHNICIAN_ID` env; it is **only injected when zero technicians match**, not added alongside matches.
+- Fallback technician is optional and resolved from tenant-level `fallback_technician_id` (preferred) or `SERVICETITAN_FALLBACK_TECHNICIAN_ID` env (global fallback); it is **only injected when zero technicians match**, not added alongside matches.
 - Non-job events can block even when `end` is absent due to normalization fallback to UTC day-end.
 - Non-job events with no parseable `start` at all are silently dropped.
 - Selected technician IDs are logged before schedule fetch for debugging.
@@ -377,7 +378,7 @@ This separation avoids mixed-timezone drift and keeps end-user output readable.
 - `getUtcDayWindow` is called with timezone `'UTC'` (not tenant timezone), producing strict UTC midnight boundaries.
 - Time normalization: `HH:MM` inputs are padded to `HH:MM:00` before conversion.
 - Booking payload stringifies all numeric IDs (`customerId`, `locationId`, `businessUnitId`, `jobTypeId`, `technicianIds`) for the ServiceTitan API.
-- `campaignId` is a required env variable (`SERVICETITAN_CAMPAIGN_ID`) included in every booking payload.
+- `campaignId` is resolved per-tenant from `servicetitan_tenants.campaign_id` (preferred) or `SERVICETITAN_CAMPAIGN_ID` env (global fallback); booking fails with 400 if neither is configured.
 - Booking default summary is `"Scheduled appointment"` when `summary` is omitted or empty.
 - Job type normalization handles both camelCase and PascalCase field names from ServiceTitan, plus multiple duration field names (`duration`, `durationSeconds`, `estimatedDurationInSeconds`, `durationMinutes`, `soldHours`).
 - Job type skill arrays can be `string[]` or `{ id, name }[]`; both shapes are normalized.
@@ -391,7 +392,7 @@ This separation avoids mixed-timezone drift and keeps end-user output readable.
 
 - No job-type match (all scores = 0) -> `400` with `"No job type match for the given reason"`.
 - No skills from matched type -> `400` with `"No skills available for the matched job type"`.
-- No technician matches and no fallback -> `400` with `"No technicians matched the required skills; set SERVICETITAN_FALLBACK_TECHNICIAN_ID for a last-resort tech"`.
+- No technician matches and no fallback -> `400` with `"No technicians matched the required skills; configure a fallback technician for this tenant via /connect"`.
 - Invalid or non-finite resolved duration -> `400` with `"Invalid duration for availability check"`.
 - Invalid time/date combinations -> Zod schema validation errors (`400`) or runtime checks (e.g. `"End must be after start"`, `"date is required when startTime or time is set"`).
 - Both `startTime` and `time` provided simultaneously -> `400` Zod error `"Provide only one of startTime or time"`.
@@ -578,7 +579,7 @@ This section lists the upstream ServiceTitan endpoints used by the runtime logic
   - all numeric IDs are stringified for the API
   - includes converted UTC appointment window (`start`, `end`)
   - includes `arrivalWindowStart` and `arrivalWindowEnd` (set to same as appointment start/end)
-  - includes `campaignId` from `SERVICETITAN_CAMPAIGN_ID` env
+  - includes `campaignId` from tenant-level `campaign_id` (preferred) or `SERVICETITAN_CAMPAIGN_ID` env (fallback)
   - includes `summary` (user-provided or defaults to `"Scheduled appointment"`)
   - `technicianIds` is an array (single element for this flow)
 
@@ -624,8 +625,8 @@ This ensures that queries made after business hours automatically look at the ne
 | `PORT` | No | `8080` | HTTP server port |
 | `NODE_ENV` | No | `development` | Environment name |
 | `SERVICETITAN_ENV` | No | `integration` | ServiceTitan environment (`integration` or `production`) |
-| `SERVICETITAN_CAMPAIGN_ID` | **Yes** | - | Campaign ID included in every booking payload |
-| `SERVICETITAN_FALLBACK_TECHNICIAN_ID` | No | - | Fallback technician when no skill matches |
+| `SERVICETITAN_CAMPAIGN_ID` | No | - | Global fallback campaign ID for booking; tenant-level `campaign_id` in `servicetitan_tenants` takes priority |
+| `SERVICETITAN_FALLBACK_TECHNICIAN_ID` | No | - | Global fallback technician when no skill matches; tenant-level `fallback_technician_id` in `servicetitan_tenants` takes priority |
 | `SUPABASE_URL` | **Yes** | - | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Yes** | - | Supabase service role key |
 

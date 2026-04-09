@@ -71,6 +71,8 @@ const connectBodySchema = z.object({
   clientSecret: z.string().min(1),
   appKey: z.string().min(1),
   timezone: z.string().min(1),
+  campaignId: z.string().min(1).optional(),
+  fallbackTechnicianId: z.number().int().positive().optional(),
 });
 
 const syncQuerySchema = z.object({
@@ -351,7 +353,8 @@ type TechnicianMatchRow = {
 
 async function technicianMatchesForSkills(
   tenantId: number,
-  skills: string[]
+  skills: string[],
+  fallbackTechnicianId?: number | null
 ): Promise<TechnicianMatchRow[]> {
   const rows = await matchTechniciansBySkills({ tenantId, requiredSkills: skills });
   const normReq = skills.map((s) => s.trim().toLowerCase()).filter(Boolean);
@@ -372,15 +375,15 @@ async function technicianMatchesForSkills(
     };
   });
 
-  if (data.length === 0 && env.serviceTitanFallbackTechnicianId != null) {
-    const id = env.serviceTitanFallbackTechnicianId;
+  const resolvedFallback = fallbackTechnicianId ?? env.serviceTitanFallbackTechnicianId;
+  if (data.length === 0 && resolvedFallback != null) {
     console.warn(
-      '[ServiceTitan] technician match: no skill matches, using SERVICETITAN_FALLBACK_TECHNICIAN_ID',
-      { id }
+      '[ServiceTitan] technician match: no skill matches, using fallback technician',
+      { id: resolvedFallback, source: fallbackTechnicianId != null ? 'tenant_config' : 'env' }
     );
     data.push({
-      technicianId: String(id),
-      name: `Technician ${id}`,
+      technicianId: String(resolvedFallback),
+      name: `Technician ${resolvedFallback}`,
       matchedSkills: [],
       usedFallback: true as const,
     });
@@ -702,8 +705,8 @@ serviceTitanRouter.post('/sync', async (req, res) => {
 serviceTitanRouter.post('/agent/match-technicians', async (req, res) => {
   try {
     const body = matchTechniciansBodySchema.parse(req.body);
-    const { credentials } = await loadTenantCredentials(body.tenantId);
-    const data = await technicianMatchesForSkills(credentials.tenantId, body.skills);
+    const { credentials, fallbackTechnicianId } = await loadTenantCredentials(body.tenantId);
+    const data = await technicianMatchesForSkills(credentials.tenantId, body.skills, fallbackTechnicianId);
 
     return res.json({ success: true, data });
   } catch (error) {
@@ -1095,7 +1098,7 @@ serviceTitanRouter.post('/agent/check-availability-by-reason', async (req, res) 
   try {
     const requestPayload = normalizedRequestPayload(req);
     const body = checkAvailabilityByReasonBodySchema.parse(requestPayload);
-    const { credentials } = await loadTenantCredentials(body.tenantId);
+    const { credentials, fallbackTechnicianId } = await loadTenantCredentials(body.tenantId);
     const kb = await loadJobTypesKnowledgeBase(body.tenantId);
     const { matches } = resolveJobTypeFromReason(body.reason, kb, body.topN);
     const top = matches[0];
@@ -1114,12 +1117,12 @@ serviceTitanRouter.post('/agent/check-availability-by-reason', async (req, res) 
       });
     }
 
-    const techMatches = await technicianMatchesForSkills(credentials.tenantId, skills);
+    const techMatches = await technicianMatchesForSkills(credentials.tenantId, skills, fallbackTechnicianId);
     if (techMatches.length === 0) {
       return res.status(400).json({
         success: false,
         error:
-          'No technicians matched the required skills; set SERVICETITAN_FALLBACK_TECHNICIAN_ID for a last-resort tech',
+          'No technicians matched the required skills; configure a fallback technician for this tenant via /connect',
       });
     }
 
@@ -1212,9 +1215,18 @@ serviceTitanRouter.post('/agent/book', async (req, res) => {
   try {
     const requestPayload = normalizedRequestPayload(req);
     const body = bookAppointmentBodySchema.parse(requestPayload);
-    const { credentials, timezone: tenantTimezone } = await loadTenantCredentials(body.tenantId);
+    const { credentials, timezone: tenantTimezone, campaignId: tenantCampaignId } = await loadTenantCredentials(body.tenantId);
     const client = new ServiceTitanClient(credentials);
     const timeZone = tenantTimezone ?? 'UTC';
+
+    const resolvedCampaignId = tenantCampaignId ?? env.serviceTitanCampaignId;
+    if (!resolvedCampaignId) {
+      return res.status(400).json({
+        success: false,
+        error: 'No campaignId configured for this tenant; set it via /connect or the SERVICETITAN_CAMPAIGN_ID env var',
+      });
+    }
+
     const idsProvidedAtRequest = body.customerId != null && body.locationId != null;
     const resolved = await resolveCustomerAndLocationIds({
       client,
@@ -1259,7 +1271,7 @@ serviceTitanRouter.post('/agent/book', async (req, res) => {
       businessUnitId: body.businessUnitId,
       jobTypeId: body.jobTypeId,
       priority: body.priority,
-      campaignId: env.serviceTitanCampaignId,
+      campaignId: resolvedCampaignId,
       startUtc,
       endUtc,
       technicianIds: [body.technicianId],
