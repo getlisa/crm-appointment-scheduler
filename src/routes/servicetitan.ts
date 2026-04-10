@@ -16,6 +16,7 @@ import { resolveJobTypeFromReason, type RetellJobTypeKbRow } from '../services/s
 import {
   findCachedCustomersByPhone,
   findCachedLocationsByCustomerId,
+  getAllActiveTechnicians,
   loadJobTypesKnowledgeBase,
   matchTechniciansBySkills,
   upsertServiceTitanCustomers,
@@ -356,7 +357,15 @@ async function technicianMatchesForSkills(
   skills: string[],
   fallbackTechnicianId?: number | null
 ): Promise<TechnicianMatchRow[]> {
+  console.log('[ServiceTitan] technician match: start', {
+    tenantId,
+    requiredSkills: skills,
+    hasTenantFallback: fallbackTechnicianId != null,
+    hasEnvFallback: env.serviceTitanFallbackTechnicianId != null,
+  });
+
   const rows = await matchTechniciansBySkills({ tenantId, requiredSkills: skills });
+  console.log('[ServiceTitan] technician match: db filter', { tenantId, dbRowCount: rows.length });
   const normReq = skills.map((s) => s.trim().toLowerCase()).filter(Boolean);
   const data: TechnicianMatchRow[] = rows.map((r) => {
     const skillList = (r.skills ?? []) as { id?: number; name?: string }[];
@@ -381,6 +390,78 @@ async function technicianMatchesForSkills(
       '[ServiceTitan] technician match: no skill matches, using fallback technician',
       { id: resolvedFallback, source: fallbackTechnicianId != null ? 'tenant_config' : 'env' }
     );
+    data.push({
+      technicianId: String(resolvedFallback),
+      name: `Technician ${resolvedFallback}`,
+      matchedSkills: [],
+      usedFallback: true as const,
+    });
+  }
+
+  console.log('[ServiceTitan] technician match: done', {
+    tenantId,
+    count: data.length,
+    technicianIds: data.map((t) => t.technicianId),
+    usedFallback: data.some((t) => t.usedFallback),
+  });
+
+  return data;
+}
+
+/**
+ * Fallback technician matching when the matched job type has no skills configured.
+ * Tokenizes the reason text and matches against each technician's skill names directly.
+ */
+async function technicianMatchesForReason(
+  tenantId: number,
+  reason: string,
+  fallbackTechnicianId?: number | null
+): Promise<TechnicianMatchRow[]> {
+  console.log('[ServiceTitan] technician match by reason: start', { tenantId });
+
+  const rows = await getAllActiveTechnicians({ tenantId });
+
+  const reasonLower = reason.toLowerCase();
+  const reasonTokens = new Set(
+    reasonLower
+      .split(/[^a-z0-9]+/g)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 1)
+  );
+
+  const data: TechnicianMatchRow[] = [];
+  for (const r of rows) {
+    const skillList = (r.skills ?? []) as { id?: number; name?: string }[];
+    const matchedSkills = skillList
+      .map((s) => s.name)
+      .filter(Boolean)
+      .filter((name) => {
+        const n = String(name).toLowerCase();
+        const skillTokens = n.split(/[^a-z0-9]+/g).filter((t) => t.length > 1);
+        return skillTokens.some((t) => reasonTokens.has(t)) || reasonLower.includes(n);
+      }) as string[];
+
+    if (matchedSkills.length > 0) {
+      data.push({
+        technicianId: String(r.technician_id),
+        name: r.name ?? `Technician ${r.technician_id}`,
+        matchedSkills,
+      });
+    }
+  }
+
+  console.log('[ServiceTitan] technician match by reason: done', {
+    tenantId,
+    count: data.length,
+    technicianIds: data.map((t) => t.technicianId),
+  });
+
+  const resolvedFallback = fallbackTechnicianId ?? env.serviceTitanFallbackTechnicianId;
+  if (data.length === 0 && resolvedFallback != null) {
+    console.warn('[ServiceTitan] technician match by reason: no skill matches, using fallback technician', {
+      id: resolvedFallback,
+      source: fallbackTechnicianId != null ? 'tenant_config' : 'env',
+    });
     data.push({
       technicianId: String(resolvedFallback),
       name: `Technician ${resolvedFallback}`,
@@ -1098,11 +1179,33 @@ serviceTitanRouter.post('/agent/check-availability-by-reason', async (req, res) 
   try {
     const requestPayload = normalizedRequestPayload(req);
     const body = checkAvailabilityByReasonBodySchema.parse(requestPayload);
+    const reasonPreview =
+      body.reason.length > 160 ? `${body.reason.slice(0, 160)}…` : body.reason;
+    console.log('[ServiceTitan] agent check-availability-by-reason: request', {
+      tenantId: body.tenantId,
+      topN: body.topN,
+      date: body.date ?? null,
+      startTime: body.startTime ?? body.time ?? null,
+      endTime: body.endTime ?? null,
+      duration: body.duration ?? null,
+      slotPreviewLimit: body.slotPreviewLimit,
+      reasonPreview,
+    });
+
     const { credentials, fallbackTechnicianId } = await loadTenantCredentials(body.tenantId);
     const kb = await loadJobTypesKnowledgeBase(body.tenantId);
     const { matches } = resolveJobTypeFromReason(body.reason, kb, body.topN);
     const top = matches[0];
+    console.log('[ServiceTitan] agent check-availability-by-reason: job type match', {
+      tenantId: body.tenantId,
+      jobTypeId: top?.jobTypeId ?? null,
+      reasonPreview,
+    });
     if (!top) {
+      console.warn('[ServiceTitan] agent check-availability-by-reason: no job type match', {
+        tenantId: body.tenantId,
+        reasonPreview,
+      });
       return res.status(400).json({
         success: false,
         error: 'No job type match for the given reason',
@@ -1110,15 +1213,23 @@ serviceTitanRouter.post('/agent/check-availability-by-reason', async (req, res) 
     }
 
     const skills = skillsAlignedWithTopNMatches(matches, body.topN);
+    let techMatches: TechnicianMatchRow[];
     if (skills.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'No skills available for the matched job type',
+      console.warn('[ServiceTitan] agent check-availability-by-reason: no skills on matched job type, falling back to reason-based technician matching', {
+        tenantId: body.tenantId,
+        jobTypeId: top.jobTypeId,
+        jobTypeName: top.row.name,
       });
+      techMatches = await technicianMatchesForReason(credentials.tenantId, body.reason, fallbackTechnicianId);
+    } else {
+      techMatches = await technicianMatchesForSkills(credentials.tenantId, skills, fallbackTechnicianId);
     }
-
-    const techMatches = await technicianMatchesForSkills(credentials.tenantId, skills, fallbackTechnicianId);
     if (techMatches.length === 0) {
+      console.warn('[ServiceTitan] agent check-availability-by-reason: no technicians after skill match', {
+        tenantId: body.tenantId,
+        jobTypeId: top.jobTypeId,
+        skills,
+      });
       return res.status(400).json({
         success: false,
         error:
@@ -1148,19 +1259,37 @@ serviceTitanRouter.post('/agent/check-availability-by-reason', async (req, res) 
 
     const result = await runAgentCheckAvailabilityCore(inner);
     if (!result.ok) {
+      console.warn('[ServiceTitan] agent check-availability-by-reason: availability core failed', {
+        tenantId: body.tenantId,
+        jobTypeId: top.jobTypeId,
+        status: result.status,
+        error: result.error,
+      });
       return res.status(result.status).json({ success: false, error: result.error });
     }
 
     const priority = top.row.priority ?? null;
     const businessId = top.row.businessUnitId ?? null;
 
+    const wrapped = buildCheckAvailabilityByReasonData(result.data, {
+      jobTypeId: top.jobTypeId,
+      priority,
+      businessId,
+    });
+    console.log('[ServiceTitan] agent check-availability-by-reason: success', {
+      tenantId: body.tenantId,
+      jobTypeId: top.jobTypeId,
+      mode:
+        result.data && typeof result.data === 'object' && 'mode' in result.data
+          ? (result.data as { mode?: unknown }).mode
+          : null,
+      technicianCount: techMatches.length,
+      resolvedDuration,
+    });
+
     return res.json({
       success: true,
-      data: buildCheckAvailabilityByReasonData(result.data, {
-        jobTypeId: top.jobTypeId,
-        priority,
-        businessId,
-      }),
+      data: wrapped,
     });
   } catch (error) {
     logRouteException('[ServiceTitan] agent check-availability-by-reason failed', error);

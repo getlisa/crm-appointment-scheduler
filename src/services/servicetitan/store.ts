@@ -92,6 +92,19 @@ export type TechnicianSkillRow = {
 /**
  * Active technicians whose skill names match all required strings (case-insensitive, per-skill substring).
  */
+export async function getAllActiveTechnicians(params: {
+  tenantId: number;
+}): Promise<TechnicianSkillRow[]> {
+  const { data, error } = await supabaseAdmin
+    .from('servicetitan_technicians')
+    .select('technician_id,name,skills')
+    .eq('tenant_id', params.tenantId)
+    .eq('is_active', true);
+
+  if (error) throw new Error(`Failed loading technicians: ${error.message}`);
+  return (data ?? []) as TechnicianSkillRow[];
+}
+
 export async function matchTechniciansBySkills(params: {
   tenantId: number;
   requiredSkills: string[];
