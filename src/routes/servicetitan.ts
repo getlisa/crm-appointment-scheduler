@@ -14,7 +14,6 @@ import { buildServiceTitanJobsPayload } from '../services/servicetitan/job-book-
 import { computeAgentAvailabilityCheck, computeAgentDaySlotsMode } from '../services/servicetitan/agent-check.js';
 import { resolveJobTypeFromReason, type RetellJobTypeKbRow } from '../services/servicetitan/job-types-kb.js';
 import {
-  findCachedCustomersByPhone,
   findCachedLocationsByCustomerId,
   getAllActiveTechnicians,
   loadJobTypesKnowledgeBase,
@@ -254,7 +253,7 @@ const resolveCustomerLocationBodySchema = z
     }
   });
 
-const bookAppointmentBodySchema = z
+const bookAppointmentBaseSchema = z
   .object({
     tenantId: tenantIdField,
     customerId: z.preprocess(
@@ -272,17 +271,16 @@ const bookAppointmentBodySchema = z
     jobTypeId: z.number().int().positive(),
     priority: z.string().min(1),
     summary: z.preprocess((v) => (v === null ? undefined : v), z.string().optional()),
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    startTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
+    date: z.preprocess((v) => (v === null ? undefined : v), z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()),
+    startTime: z.preprocess((v) => (v === null || v === '' ? undefined : v), z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional()),
     endTime: z.preprocess(
-      (v) => (v === null ? undefined : v),
+      (v) => (v === null || v === '' ? undefined : v),
       z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional()
     ),
     duration: z.preprocess(
       (v) => (v === null ? undefined : v),
-      z.coerce.number().int().positive().optional().default(60)
+      z.coerce.number().int().positive().optional()
     ),
-    technicianId: z.number().int().positive(),
   })
   .superRefine((b, ctx) => {
     const hasIds = b.customerId != null && b.locationId != null;
@@ -295,9 +293,50 @@ const bookAppointmentBodySchema = z
           'Provide customerId + locationId, or provide customerName + phone + address to resolve/create them',
       });
     }
+  });
+
+const bookAppointmentBodySchema = bookAppointmentBaseSchema
+  .and(z.object({ technicianId: z.number().int().positive() }))
+  .superRefine((b, ctx) => {
+    if (!b.date) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['date'], message: 'date is required' });
+    }
+    if (!b.startTime) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['startTime'], message: 'startTime is required' });
+    }
+    if (b.endTime == null && b.duration == null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['duration'], message: 'Provide endTime or duration' });
+    }
+  });
+
+// For unassigned bookings: no technician, no startTime/endTime. Date is required so ServiceTitan
+// can receive appointments[].start and appointments[].end (defaulting to 00:00 + duration).
+const bookUnassignedSchema = z
+  .object({
+    tenantId: tenantIdField,
+    customerId: z.preprocess((v) => (v === null ? undefined : v), z.number().int().positive().optional()),
+    locationId: z.preprocess((v) => (v === null ? undefined : v), z.number().int().positive().optional()),
+    customerName: z.preprocess((v) => (v === null ? undefined : v), z.string().min(1).optional()),
+    phone: z.preprocess((v) => (v === null ? undefined : v), z.string().min(1).optional()),
+    address: z.preprocess((v) => (v === null ? undefined : v), customerAddressSchema.optional()),
+    businessUnitId: z.number().int().positive(),
+    jobTypeId: z.number().int().positive(),
+    priority: z.string().min(1),
+    summary: z.preprocess((v) => (v === null ? undefined : v), z.string().optional()),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    duration: z.preprocess((v) => (v === null ? undefined : v), z.coerce.number().int().positive().optional()),
   })
-  .refine((b) => b.endTime != null || b.duration != null, {
-    message: 'Provide endTime or duration',
+  .superRefine((b, ctx) => {
+    const hasIds = b.customerId != null && b.locationId != null;
+    const hasCustomerContext = b.customerName && b.phone && b.address;
+    if (!hasIds && !hasCustomerContext) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['customerId'],
+        message:
+          'Provide customerId + locationId, or provide customerName + phone + address to resolve/create them',
+      });
+    }
   });
 
 function skillListForJobTypeRow(row: RetellJobTypeKbRow): string[] {
@@ -528,49 +567,50 @@ async function resolveCustomerAndLocationIds(params: {
   const addr = params.address;
   let customerCreated = false;
   let locationCreated = false;
-  const cachedCustomers = await findCachedCustomersByPhone({
-    tenantId: params.tenantId,
+
+  // Step 1: API lookup by phone
+  console.log('[resolveCustomer] querying API by phone', { tenantId: params.tenantId, phone: params.phone });
+  const phoneMatchedCustomers = await params.client.findCustomers({
     phone: params.phone,
   });
 
-  let customer: ServiceTitanCustomerApiModel | null =
-    cachedCustomers
-      .map((c) => ({
-        id: c.customer_id,
-        name: c.name,
-        address: {
-          street: c.address_street,
-          unit: c.address_unit,
-          city: c.address_city,
-          state: c.address_state,
-          zip: c.address_zip,
-          country: c.address_country,
-        },
-      }))
-      .find((c) => (c.address ? isSameAddress(c.address, addr) : false)) ?? null;
+  let customer: ServiceTitanCustomerApiModel | null = null;
+  if (phoneMatchedCustomers.length) {
+    console.log('[resolveCustomer] found via API by phone', { customerId: phoneMatchedCustomers[0].id });
+    await upsertServiceTitanCustomers({
+      tenantId: params.tenantId,
+      customers: phoneMatchedCustomers,
+    });
+    customer = phoneMatchedCustomers[0];
+  }
 
   if (!customer) {
-    const matchedCustomers = await params.client.findCustomers({
-      phone: params.phone,
+    // Step 3: fallback — API lookup by address (phone produced no results)
+    console.log('[resolveCustomer] phone lookup exhausted, falling back to address search', { tenantId: params.tenantId });
+    const addressMatchedCustomers = await params.client.findCustomers({
       street: addr.street,
       city: addr.city,
       state: addr.state,
       zip: addr.zip,
       country: addr.country,
     });
-    if (matchedCustomers.length) {
+    if (addressMatchedCustomers.length) {
       await upsertServiceTitanCustomers({
         tenantId: params.tenantId,
-        customers: matchedCustomers,
+        customers: addressMatchedCustomers,
       });
+      customer =
+        addressMatchedCustomers.find((c) => (c.address ? isSameAddress(c.address, addr) : false)) ??
+        addressMatchedCustomers[0] ??
+        null;
+      if (customer) {
+        console.log('[resolveCustomer] found via address search', { customerId: customer.id });
+      }
     }
-    customer =
-      matchedCustomers.find((c) => (c.address ? isSameAddress(c.address, addr) : false)) ??
-      matchedCustomers[0] ??
-      null;
   }
 
   if (!customer) {
+    console.log('[resolveCustomer] no existing customer found, creating new', { tenantId: params.tenantId, phone: params.phone });
     customer = await params.client.createCustomer({
       name: params.customerName,
       address: addr,
@@ -1372,14 +1412,14 @@ serviceTitanRouter.post('/agent/book', async (req, res) => {
       locationCreated: resolved.locationCreated,
     });
 
-    const startUtc = localWallClockToUtcIso(body.date, normalizeTimeComponent(body.startTime), timeZone);
+    const startUtc = localWallClockToUtcIso(body.date!, normalizeTimeComponent(body.startTime!), timeZone);
     if (!startUtc) {
       return res.status(400).json({ success: false, error: 'Invalid startTime or date' });
     }
 
     let endUtc: string;
     if (body.endTime) {
-      const parsed = localWallClockToUtcIso(body.date, normalizeTimeComponent(body.endTime), timeZone);
+      const parsed = localWallClockToUtcIso(body.date!, normalizeTimeComponent(body.endTime), timeZone);
       if (!parsed) {
         return res.status(400).json({ success: false, error: 'Invalid endTime or date' });
       }
@@ -1433,6 +1473,93 @@ serviceTitanRouter.post('/agent/book', async (req, res) => {
     });
   } catch (error) {
     logRouteException('[ServiceTitan] agent book failed', error);
+    return res.status(400).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+serviceTitanRouter.post('/agent/book-unassigned', async (req, res) => {
+  try {
+    const requestPayload = normalizedRequestPayload(req);
+    const body = bookUnassignedSchema.parse(requestPayload);
+    const { credentials, timezone: tenantTimezone, campaignId: tenantCampaignId } = await loadTenantCredentials(body.tenantId);
+    const client = new ServiceTitanClient(credentials);
+    const timeZone = tenantTimezone ?? 'UTC';
+
+    const resolvedCampaignId = tenantCampaignId ?? env.serviceTitanCampaignId;
+    if (!resolvedCampaignId) {
+      return res.status(400).json({
+        success: false,
+        error: 'No campaignId configured for this tenant; set it via /connect or the SERVICETITAN_CAMPAIGN_ID env var',
+      });
+    }
+
+    const idsProvidedAtRequest = body.customerId != null && body.locationId != null;
+    const resolved = await resolveCustomerAndLocationIds({
+      client,
+      tenantId: body.tenantId,
+      customerId: body.customerId,
+      locationId: body.locationId,
+      customerName: body.customerName,
+      phone: body.phone,
+      address: body.address,
+    });
+    const resolveStatus = deriveResolveCustomerLocationStatus({
+      idsProvided: idsProvidedAtRequest,
+      customerCreated: resolved.customerCreated,
+      locationCreated: resolved.locationCreated,
+    });
+
+    // date is guaranteed by bookUnassignedSchema; always anchors at 00:00 + duration
+    const startUtc = localWallClockToUtcIso(body.date, '00:00:00', timeZone);
+    if (!startUtc) {
+      return res.status(400).json({ success: false, error: 'Invalid date' });
+    }
+
+    const duration = body.duration ?? 60;
+    const endUtc = new Date(new Date(startUtc).getTime() + duration * 60_000).toISOString();
+
+    const jobPayload = buildServiceTitanJobsPayload({
+      customerId: resolved.customerId,
+      locationId: resolved.locationId,
+      businessUnitId: body.businessUnitId,
+      jobTypeId: body.jobTypeId,
+      priority: body.priority,
+      campaignId: resolvedCampaignId,
+      startUtc,
+      endUtc,
+      technicianIds: [],
+      summary: body.summary,
+    });
+
+    const raw = await client.bookJob(jobPayload);
+    const job = raw as {
+      id?: number;
+      appointments?: { id?: number; start?: string; end?: string; technicianIds?: number[] }[];
+    };
+    const ap = job.appointments?.[0];
+
+    return res.json({
+      success: true,
+      data: {
+        jobId: job.id ?? null,
+        appointmentId: ap?.id ?? null,
+        customerId: resolved.customerId,
+        locationId: resolved.locationId,
+        status: resolveStatus,
+        customerCreated: resolved.customerCreated,
+        locationCreated: resolved.locationCreated,
+        technicianId: null,
+        start: ap?.start ? toClientTime(ap.start, timeZone) : toClientTime(startUtc, timeZone),
+        end: ap?.end ? toClientTime(ap.end, timeZone) : toClientTime(endUtc, timeZone),
+        startUtc: ap?.start ?? startUtc,
+        endUtc: ap?.end ?? endUtc,
+      },
+    });
+  } catch (error) {
+    logRouteException('[ServiceTitan] agent book-unassigned failed', error);
     return res.status(400).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
