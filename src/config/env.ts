@@ -19,6 +19,7 @@ const envSchema = z.object({
   RETELL_API_KEY: z.string().min(1),
   BASE_URL: z.string().url(),
   LLM_ID: z.string().optional(),
+  BUILDOPS_API_URL: z.string().url().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -46,5 +47,6 @@ export const env = {
   tenantId: parsed.data.TENANT_ID,
   retellApiKey: parsed.data.RETELL_API_KEY,
   retellBaseUrl: parsed.data.BASE_URL,
-  retellLlmId: parsed.data.LLM_ID
+  retellLlmId: parsed.data.LLM_ID,
+  buildopsApiUrl: parsed.data.BUILDOPS_API_URL ?? 'https://public-api.live.buildops.com',
 };
