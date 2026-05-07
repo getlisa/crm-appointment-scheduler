@@ -16,6 +16,7 @@ const CSV_FIELDS = [
   'id', 'name', 'accountNumber', 'customerType', 'isActive', 'email',
   'customerNumber', 'creditLimit', 'isTaxable', 'taxRateValue', 'status',
   'phonePrimary', 'phoneAlternate', 'receiveSMS', 'invoiceDeliveryPref',
+  'priceBookId', 'paymentTermId', 'invoicePresetId',
   'logoUrl', 'websiteUrl', 'version', 'tenantId', 'tenantCompanyId', 'amountNotToExceed',
 ];
 

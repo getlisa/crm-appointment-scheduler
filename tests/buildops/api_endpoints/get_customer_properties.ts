@@ -29,8 +29,27 @@ async function getAccessToken(): Promise<string> {
   return data.access_token;
 }
 
+function parseCSVLine(line: string): string[] {
+  const cols: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+    } else if (ch === ',' && !inQuotes) {
+      cols.push(cur); cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  cols.push(cur);
+  return cols;
+}
+
 function lookupCustomerByPhone(phone: string): { id: string; name: string } {
-  const csvPath = path.resolve(__dirname, '../output/customers.csv');
+  const csvPath = path.resolve(__dirname, 'customers.csv');
   const lines = fs.readFileSync(csvPath, 'utf-8').trim().split('\n');
   const headers = lines[0].split(',');
   const idIdx = headers.indexOf('id');
@@ -38,7 +57,7 @@ function lookupCustomerByPhone(phone: string): { id: string; name: string } {
   const phoneIdx = headers.indexOf('phonePrimary');
 
   for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',');
+    const cols = parseCSVLine(lines[i]);
     if (cols[phoneIdx] === phone) {
       return { id: cols[idIdx], name: cols[nameIdx] };
     }
