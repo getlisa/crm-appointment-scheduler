@@ -39,6 +39,27 @@ export interface CustomerRow {
   normalizedPhoneSecondary: string | null;
 }
 
+export interface RepresentativeRow {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  propertyId: string;
+  firstName: string;
+  lastName: string;
+  cellPhone: string | null;
+  landlinePhone: string | null;
+  normalizedCellPhone: string | null;
+  normalizedLandlinePhone: string | null;
+  email: string | null;
+  isActive: boolean;
+  isDoNotCall: boolean;
+  isEmailOptOut: boolean;
+  isSmsOptOut: boolean;
+  createdAt: string;
+  updatedAt: string;
+  version: number;
+}
+
 export interface PropertyRow {
   id: string;
   name: string | null;
