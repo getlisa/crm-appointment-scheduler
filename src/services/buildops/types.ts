@@ -35,6 +35,7 @@ export interface CustomerRow {
   phoneSecondary: string | null;
   isActive: boolean;
   addresses: AddressObj[];
+  propertyAddresses?: AddressObj[];
   normalizedPhonePrimary: string | null;
   normalizedPhoneSecondary: string | null;
 }
@@ -144,6 +145,7 @@ export interface FuzzyQuery {
   address?: string;
   zip?: string;
   oldPhone?: string;
+  propertyAddress?: string;
 }
 
 export interface ScoredCandidate {

@@ -83,6 +83,37 @@ export interface CreateRepInput {
   email?: string | null;
 }
 
+async function resolveUniqueName(
+  customerId: string,
+  firstName: string,
+  lastName: string,
+): Promise<{ firstName: string; lastName: string }> {
+  const baseLast = lastName.trim();
+
+  const { data } = await supabase
+    .from('representatives')
+    .select('first_name, last_name')
+    .eq('customer_id', customerId)
+    .ilike('first_name', firstName.trim())
+    .ilike('last_name', `${baseLast}%`);
+
+  if (!data || data.length === 0) return { firstName: firstName.trim(), lastName: baseLast };
+
+  // Collect existing numeric suffixes for this base last name
+  const suffixRe = new RegExp(`^${baseLast}(\\d*)$`, 'i');
+  const usedNumbers = new Set<number>();
+  for (const row of data as { first_name: string; last_name: string }[]) {
+    const match = row.last_name.match(suffixRe);
+    if (match) usedNumbers.add(match[1] === '' ? 1 : parseInt(match[1], 10));
+  }
+
+  if (!usedNumbers.has(1)) return { firstName: firstName.trim(), lastName: baseLast };
+
+  let n = 2;
+  while (usedNumbers.has(n)) n++;
+  return { firstName: firstName.trim(), lastName: `${baseLast}${n}` };
+}
+
 export async function createRepresentative(
   input: CreateRepInput,
 ): Promise<RepresentativeRow | null> {
@@ -92,14 +123,20 @@ export async function createRepresentative(
 
   const normalize = (phone: string) => phone.replace(/\D/g, '').slice(-10);
 
+  const { firstName, lastName } = await resolveUniqueName(
+    input.customerId,
+    input.firstName,
+    input.lastName,
+  );
+
   const { data, error } = await supabase
     .from('representatives')
     .insert({
       tenant_id: input.tenantId,
       customer_id: input.customerId,
       property_id: input.propertyId ?? null,
-      first_name: input.firstName,
-      last_name: input.lastName,
+      first_name: firstName,
+      last_name: lastName,
       cell_phone: input.cellPhone ?? null,
       landline_phone: input.landlinePhone ?? null,
       normalized_cell_phone: input.cellPhone ? normalize(input.cellPhone) : null,

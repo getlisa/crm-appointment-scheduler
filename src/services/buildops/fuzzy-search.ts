@@ -171,23 +171,35 @@ function scoreCandidate(query: FuzzyQuery, customer: CustomerRow): number {
     score += jaroWinkler(queryFirst, customerFirst) * W_FIRST_NAME;
   }
 
-  const addr = customer.addresses?.[0];
-  if (query.address && addr?.line1) {
-    score += tokenSetRatio(
-      normalizeAddress(query.address),
-      normalizeAddress(addr.line1),
-    ) * W_ADDRESS;
+  // Score against all known addresses: customer billing addresses + property addresses
+  const allAddresses = [
+    ...(customer.addresses ?? []),
+    ...(customer.propertyAddresses ?? []),
+  ];
+  const spokenAddress = query.address ?? query.propertyAddress;
+
+  if (spokenAddress && allAddresses.length > 0) {
+    const normalizedSpoken = normalizeAddress(spokenAddress);
+    const bestAddrScore = Math.max(
+      ...allAddresses
+        .filter(a => a.line1)
+        .map(a => tokenSetRatio(normalizedSpoken, normalizeAddress(a.line1!))),
+    );
+    if (bestAddrScore > 0) score += bestAddrScore * W_ADDRESS;
+
+    // City bonus from best matching address
+    for (const a of allAddresses) {
+      if (a.city) {
+        const qCity = normalizeName(spokenAddress.split(',').pop()?.trim() ?? '');
+        const cCity = normalizeName(a.city);
+        if (qCity && cCity && qCity === cCity) { score += W_CITY; break; }
+      }
+    }
   }
 
+  const addr = allAddresses[0];
   if (query.zip && addr?.zip) {
     score += (query.zip.slice(0, 5) === addr.zip.slice(0, 5) ? 1 : 0) * W_ZIP;
-  }
-
-  if (addr?.city && query.address) {
-    // City match is a bonus when address is being compared
-    const qCity = normalizeName(query.address.split(',').pop()?.trim() ?? '');
-    const cCity = normalizeName(addr.city);
-    if (qCity && cCity && qCity === cCity) score += W_CITY;
   }
 
   if (query.oldPhone) {

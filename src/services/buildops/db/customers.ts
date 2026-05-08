@@ -37,31 +37,94 @@ export async function getFuzzyCandidates(
   tenantId: string,
   query: FuzzyQuery,
 ): Promise<CustomerRow[]> {
-  if (!query.name && !query.zip) return [];
+  if (!query.name && !query.zip && !query.address && !query.propertyAddress) return [];
 
-  let q = supabase
-    .from('customers')
-    .select('*')
-    .eq('tenant_id', tenantId)
-    .eq('is_active', true)
-    .limit(200);
+  const customerMap = new Map<string, CustomerRow>();
 
-  if (query.name && query.zip) {
-    // Both: name ilike AND zip match via JSONB addresses array
-    q = q.ilike('name', `%${query.name}%`).filter(
-      'addresses',
-      'cs',
-      JSON.stringify([{ zip: query.zip }]),
-    );
-  } else if (query.name) {
-    q = q.ilike('name', `%${query.name}%`);
-  } else if (query.zip) {
-    q = q.filter('addresses', 'cs', JSON.stringify([{ zip: query.zip }]));
+  // ── Search customers by name / zip ────────────────────────────────────────
+  if (query.name || query.zip) {
+    let q = supabase
+      .from('customers')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .eq('is_active', true)
+      .limit(200);
+
+    if (query.name && query.zip) {
+      q = q.ilike('name', `%${query.name}%`).filter(
+        'addresses',
+        'cs',
+        JSON.stringify([{ zip: query.zip }]),
+      );
+    } else if (query.name) {
+      q = q.ilike('name', `%${query.name}%`);
+    } else if (query.zip) {
+      q = q.filter('addresses', 'cs', JSON.stringify([{ zip: query.zip }]));
+    }
+
+    const { data } = await q;
+    if (data) {
+      for (const row of data as Record<string, unknown>[]) {
+        const customer = mapRow(row);
+        customerMap.set(customer.id, customer);
+      }
+    }
   }
 
-  const { data, error } = await q;
-  if (error || !data) return [];
-  return (data as Record<string, unknown>[]).map(mapRow);
+  // ── Search property table by address line, bring in owning customers ──────
+  const spokenAddress = query.propertyAddress ?? query.address;
+  if (spokenAddress) {
+    const addressKeyword = spokenAddress.split(' ').slice(0, 4).join(' ');
+    const { data: propData } = await supabase
+      .from('property')
+      .select('customer_id, address')
+      .ilike('address->>line1', `%${addressKeyword}%`)
+      .limit(50);
+
+    if (propData && propData.length > 0) {
+      const customerIds = [...new Set((propData as Record<string, unknown>[]).map(r => r['customer_id'] as string))];
+
+      // Build property address map: customerId → AddressObj[]
+      const propAddressMap = new Map<string, AddressObj[]>();
+      for (const r of propData as Record<string, unknown>[]) {
+        const cid = r['customer_id'] as string;
+        const addr = r['address'] as AddressObj;
+        const existing = propAddressMap.get(cid) ?? [];
+        existing.push(addr);
+        propAddressMap.set(cid, existing);
+      }
+
+      // Fetch any customers not already in the map
+      const missing = customerIds.filter(id => !customerMap.has(id));
+      if (missing.length > 0) {
+        const { data: custData } = await supabase
+          .from('customers')
+          .select('*')
+          .eq('tenant_id', tenantId)
+          .eq('is_active', true)
+          .in('id', missing);
+
+        if (custData) {
+          for (const row of custData as Record<string, unknown>[]) {
+            customerMap.set(row['id'] as string, mapRow(row));
+          }
+        }
+      }
+
+      // Hydrate all matched customers with their property addresses
+      for (const [cid, propAddrs] of propAddressMap) {
+        const customer = customerMap.get(cid);
+        if (customer) {
+          customer.propertyAddresses = [
+            ...(customer.propertyAddresses ?? []),
+            ...propAddrs,
+          ];
+        }
+      }
+    }
+  }
+
+  return [...customerMap.values()];
 }
 
 export async function getCustomerById(

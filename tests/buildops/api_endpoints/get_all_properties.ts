@@ -11,12 +11,20 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET!;
 const TENANT_ID = process.env.TENANT_ID!;
 const BASE_URL = 'https://public-api.live.buildops.com/v1';
 
-const CSV_FIELDS = [
+const PROPERTY_FIELDS = [
   'id', 'companyName', 'accountNumber', 'customerPropertyTypeValue', 'status',
   'email', 'phonePrimary', 'phoneAlternate', 'customerId', 'billingCustomerId',
   'priceBookId', 'isTaxable', 'taxRateValue', 'taxRateName', 'taxRateId',
   'amountNotToExceed', 'receiveSMS', 'sameAddress', 'version',
   'tenantId', 'tenantCompanyId',
+];
+
+const ADDRESS_FIELDS = [
+  'customerId', 'customerName',
+  'propertyId', 'propertyCompanyName', 'propertyStatus',
+  'addressId', 'addressType', 'addressLine1', 'addressLine2',
+  'city', 'state', 'zipcode', 'country',
+  'latitude', 'longitude', 'status', 'isActive',
 ];
 
 function escape(val: unknown): string {
@@ -72,6 +80,26 @@ async function getAllProperties(token: string): Promise<Record<string, unknown>[
   return results;
 }
 
+function loadCustomerMap(outDir: string): Map<string, string> {
+  const csvPath = path.resolve(outDir, 'customers.csv');
+  if (!fs.existsSync(csvPath)) {
+    console.warn('Warning: customers.csv not found in output/ — customerName will be empty. Run getcustomers.ts first.');
+    return new Map();
+  }
+  const lines = fs.readFileSync(csvPath, 'utf-8').trim().split('\n');
+  const headers = lines[0].split(',');
+  const idIdx = headers.indexOf('id');
+  const nameIdx = headers.indexOf('name');
+  const map = new Map<string, string>();
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',');
+    const id = cols[idIdx]?.trim();
+    const name = cols[nameIdx]?.trim();
+    if (id) map.set(id, name ?? '');
+  }
+  return map;
+}
+
 async function main() {
   if (!CLIENT_ID || !CLIENT_SECRET || !TENANT_ID) {
     console.error('Missing CLIENT_ID, CLIENT_SECRET, or TENANT_ID in .env');
@@ -88,11 +116,46 @@ async function main() {
 
   const outDir = path.resolve(__dirname, '../output');
   fs.mkdirSync(outDir, { recursive: true });
-  const outPath = path.resolve(outDir, 'properties.csv');
 
-  const rows = properties.map(p => CSV_FIELDS.map(f => escape(p[f])).join(','));
-  fs.writeFileSync(outPath, [CSV_FIELDS.join(','), ...rows].join('\n'), 'utf-8');
-  console.log(`CSV written: ${outPath} (${properties.length} rows)`);
+  const customerMap = loadCustomerMap(outDir);
+
+  // properties.csv
+  const propRows = properties.map(p => PROPERTY_FIELDS.map(f => escape(p[f])).join(','));
+  const propPath = path.resolve(outDir, 'properties.csv');
+  fs.writeFileSync(propPath, [PROPERTY_FIELDS.join(','), ...propRows].join('\n'), 'utf-8');
+  console.log(`CSV written: ${propPath} (${properties.length} rows)`);
+
+  // property_addresses.csv — one row per address, with property context
+  const addrRows: string[] = [];
+  for (const p of properties) {
+    const addresses = (p['addresses'] as Record<string, unknown>[] | undefined) ?? [];
+    for (const a of addresses) {
+      const cid = p['customerId'] as string | undefined;
+      const row: Record<string, unknown> = {
+        customerId:          cid ?? '',
+        customerName:        cid ? (customerMap.get(cid) ?? '') : '',
+        propertyId:          p['id'],
+        propertyCompanyName: p['companyName'],
+        propertyStatus:      p['status'],
+        addressId:           a['id'],
+        addressType:         a['addressType'],
+        addressLine1:        a['addressLine1'],
+        addressLine2:        a['addressLine2'],
+        city:                a['city'],
+        state:               a['state'],
+        zipcode:             a['zipcode'],
+        country:             a['country'],
+        latitude:            a['latitude'],
+        longitude:           a['longitude'],
+        status:              a['status'],
+        isActive:            a['isActive'],
+      };
+      addrRows.push(ADDRESS_FIELDS.map(f => escape(row[f])).join(','));
+    }
+  }
+  const addrPath = path.resolve(outDir, 'property_addresses.csv');
+  fs.writeFileSync(addrPath, [ADDRESS_FIELDS.join(','), ...addrRows].join('\n'), 'utf-8');
+  console.log(`CSV written: ${addrPath} (${addrRows.length} rows)`);
 }
 
 main().catch(console.error);

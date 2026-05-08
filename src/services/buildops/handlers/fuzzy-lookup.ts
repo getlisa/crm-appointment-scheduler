@@ -10,13 +10,14 @@ export async function handleLookupFuzzy(
   const query: FuzzyQuery = {
     name: args.name as string | undefined,
     address: args.address as string | undefined,
+    propertyAddress: args.property_address as string | undefined,
     zip: args.zip as string | undefined,
     oldPhone: args.old_phone as string | undefined,
   };
 
-  if (!query.name && !query.zip) {
+  if (!query.name && !query.zip && !query.address && !query.propertyAddress) {
     return {
-      result: 'need_more_info: please provide at least a name or zip code to search',
+      result: 'need_more_info: please provide at least a name, zip code, or address to search',
     };
   }
 
