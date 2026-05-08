@@ -1,5 +1,5 @@
 import { supabaseAdmin as supabase } from '../../../lib/supabase.js';
-import type { InboundCallRow, InboundCallStatus } from '../types.js';
+import type { InboundCallRow, InboundCallStatus, PendingJobData } from '../types.js';
 
 function mapRow(row: Record<string, unknown>): InboundCallRow {
   return {
@@ -11,6 +11,7 @@ function mapRow(row: Record<string, unknown>): InboundCallRow {
     matchedCustomerId: row.matched_customer_id as string | null,
     status: row.status as InboundCallStatus,
     buildopsJobId: row.buildops_job_id as string | null,
+    pendingJobs: (row.pending_jobs as PendingJobData[]) ?? [],
   };
 }
 
@@ -74,5 +75,22 @@ export async function setCallStatus(
   await supabase
     .from('inbound_calls')
     .update({ status })
+    .eq('retell_call_id', retellCallId);
+}
+
+export async function appendPendingJob(
+  retellCallId: string,
+  job: PendingJobData,
+): Promise<void> {
+  const { data } = await supabase
+    .from('inbound_calls')
+    .select('pending_jobs')
+    .eq('retell_call_id', retellCallId)
+    .single();
+
+  const current: PendingJobData[] = (data as Record<string, unknown> | null)?.pending_jobs as PendingJobData[] ?? [];
+  await supabase
+    .from('inbound_calls')
+    .update({ pending_jobs: [...current, job] })
     .eq('retell_call_id', retellCallId);
 }

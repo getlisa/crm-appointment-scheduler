@@ -86,6 +86,7 @@ export interface InboundCallRow {
   matchedCustomerId: string | null;
   status: InboundCallStatus;
   buildopsJobId: string | null;
+  pendingJobs: PendingJobData[];
 }
 
 export interface PricebookRow {
@@ -158,6 +159,22 @@ export type LookupDecision =
 // ── Job creation ──────────────────────────────────────────────────────────────
 
 export type JobStatus = 'Open' | 'In Progress' | 'On Hold' | 'Cancelled';
+
+export interface PendingTaskData {
+  name: string;
+  entries: TaskEntry[];
+}
+
+export interface PendingJobData {
+  customerPropertyId: string;
+  jobTypeId: string;
+  priceBookId: string;
+  isUseTaxable: boolean;
+  status: JobStatus;
+  propertyAddress?: AddressObj;
+  jobTypeName?: string;
+  tasks: PendingTaskData[];
+}
 
 export interface CreateJobInput {
   customerPropertyId: string;

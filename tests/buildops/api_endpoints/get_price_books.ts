@@ -42,7 +42,7 @@ function parseCSVLine(line: string): string[] {
 }
 
 function extractPriceBookIdsFromCSV(): string[] {
-  const csvPath = path.resolve(__dirname, 'customers.csv');
+  const csvPath = path.resolve(__dirname, '../output/customers.csv');
   const lines = fs.readFileSync(csvPath, 'utf-8').trim().split('\n');
   const headers = lines[0].split(',');
   const pbIdx = headers.indexOf('priceBookId');

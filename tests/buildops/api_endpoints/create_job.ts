@@ -52,7 +52,7 @@ async function getAccessToken(): Promise<string> {
 }
 
 function lookupCustomerByPhone(phone: string) {
-  const csvPath = path.resolve(__dirname, 'customers.csv');
+  const csvPath = path.resolve(__dirname, '../output/customers.csv');
   const raw = fs.readFileSync(csvPath, 'utf-8');
   const lines = raw.split(/\r?\n/).filter(l => l.trim() !== '');
   const headers = parseCSVLine(lines[0]);

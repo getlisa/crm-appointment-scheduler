@@ -86,7 +86,9 @@ async function getAllCustomers() {
   if (totalPages > 1) console.log();
 
   const lines = [CSV_FIELDS.join(','), ...toCSVRows(allItems)];
-  const outPath = path.resolve(__dirname, 'customers.csv');
+  const outDir = path.resolve(__dirname, '../output');
+  fs.mkdirSync(outDir, { recursive: true });
+  const outPath = path.resolve(outDir, 'customers.csv');
   fs.writeFileSync(outPath, lines.join('\n'), 'utf-8');
   console.log(`CSV written: ${outPath} (${allItems.length} rows)`);
 }

@@ -3,7 +3,7 @@ import type { ResolutionRow } from '../types.js';
 
 export async function resolveByInboundNumber(e164: string): Promise<ResolutionRow | null> {
   const { data, error } = await supabase
-    .from('inbound_no_to_tenant_resolution')
+    .from('buildops_tenants')
     .select('no, client_id, client_secret, access_token, buildops_tenant_id')
     .eq('no', e164)
     .single();

@@ -116,14 +116,6 @@ export async function getCustomer(
   );
 }
 
-export async function createCustomer(
-  ctx: BuildOpsContext,
-  name: string,
-  addressType: string,
-): Promise<{ customerId: string }> {
-  const res = await request<{ id: string }>(ctx, 'POST', '/v1/customers', { name, addressType });
-  return { customerId: res.id };
-}
 
 export async function updateCustomer(
   ctx: BuildOpsContext,

@@ -1,21 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { handleRetellWebhook } from '../lib/retell.js';
 import { supabaseAdmin as supabase } from '../lib/supabase.js';
 
 const router = Router();
-
-// ── Retell unified webhook ────────────────────────────────────────────────────
-
-router.post('/retell/webhook', async (req, res) => {
-  try {
-    const result = await handleRetellWebhook(req.body);
-    res.json(result);
-  } catch (err) {
-    console.error('[buildops] webhook error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
 
 // ── Admin: register / update a tenant ────────────────────────────────────────
 

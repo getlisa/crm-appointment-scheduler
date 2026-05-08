@@ -1,6 +1,6 @@
 import { getFuzzyCandidates } from '../db/customers.js';
 import { setMatchedCustomer, setCallStatus } from '../db/inbound-calls.js';
-import { scoreCandidates, applyThreshold } from '../fuzzy-search.js';
+import { scoreCandidates, applyThreshold, normalizePhoneLast10 } from '../fuzzy-search.js';
 import type { InboundCallRow, FuzzyQuery, RetellFunctionResult } from '../types.js';
 
 export async function handleLookupFuzzy(
@@ -26,14 +26,22 @@ export async function handleLookupFuzzy(
 
   if (decision.band === 'accept') {
     await setMatchedCustomer(session.retellCallId, decision.candidate.id);
+
+    const callerLast10 = session.caller ? normalizePhoneLast10(session.caller) : null;
+    const newNumberDetected =
+      callerLast10 !== null &&
+      callerLast10 !== decision.candidate.normalizedPhonePrimary &&
+      callerLast10 !== decision.candidate.normalizedPhoneSecondary;
+
     return {
       result: JSON.stringify({
-        status: 'matched',
-        customer: {
-          id: decision.candidate.id,
-          name: decision.candidate.name,
-          address: decision.candidate.addresses?.[0] ?? null,
-        },
+        status: 'found',
+        identified: true,
+        confidence: scored[0]?.score ?? 1,
+        customer_id: decision.candidate.id,
+        customer_name: decision.candidate.name,
+        new_number_detected: newNumberDetected,
+        address: decision.candidate.addresses?.[0] ?? null,
       }),
     };
   }
@@ -41,7 +49,12 @@ export async function handleLookupFuzzy(
   if (decision.band === 'disambiguate') {
     return {
       result: JSON.stringify({
-        status: 'multiple_candidates',
+        status: 'multiple_matches',
+        identified: false,
+        confidence: scored[0]?.score ?? 0,
+        customer_id: null,
+        customer_name: null,
+        new_number_detected: false,
         candidates: decision.candidates.map(c => ({
           id: c.id,
           name: c.name,
@@ -51,18 +64,17 @@ export async function handleLookupFuzzy(
     };
   }
 
-  // Handoff
+  // Handoff — no confident match found
   await setCallStatus(session.retellCallId, 'handed_off');
   return {
     result: JSON.stringify({
-      status: 'handoff',
-      message:
-        "I wasn't able to find your account with confidence. Let me get a teammate to help you — can I take a callback number?",
-      top_candidates: scored.slice(0, 3).map(c => ({
-        id: c.customer.id,
-        name: c.customer.name,
-        score: c.score,
-      })),
+      status: 'not_found',
+      identified: false,
+      confidence: scored[0]?.score ?? 0,
+      customer_id: null,
+      customer_name: null,
+      new_number_detected: false,
+      message: "I wasn't able to find your account. I'm not finding that account in our system.",
     }),
   };
 }

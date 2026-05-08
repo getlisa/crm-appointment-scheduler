@@ -10,6 +10,7 @@ import { handleLookupFuzzy } from '../services/buildops/handlers/fuzzy-lookup.js
 import {
   handleConfirmCustomer,
   handleGetProperties,
+  handleMatchProperty,
 } from '../services/buildops/handlers/customer.js';
 import { handleGetPricebookItems } from '../services/buildops/handlers/pricebook.js';
 import {
@@ -17,9 +18,13 @@ import {
   handleGetDepartments,
 } from '../services/buildops/handlers/job-types.js';
 import {
-  handleCreateJob,
+  handlePrepareJob,
   handleAddTaskToJob,
 } from '../services/buildops/handlers/job.js';
+import {
+  handleSaveCallerNumber,
+  handleAddRepresentative,
+} from '../services/buildops/handlers/representative.js';
 import type {
   RetellWebhookBody,
   RetellFunctionResult,
@@ -58,7 +63,7 @@ async function handleCallStarted(
   return { ok: true };
 }
 
-async function handleFunctionCall(body: RetellWebhookBody): Promise<RetellFunctionResult> {
+export async function handleFunctionCall(body: RetellWebhookBody): Promise<RetellFunctionResult> {
   const callId = body.call.call_id;
   const functionName = body.name ?? '';
   const args = (body.arguments ?? {}) as Record<string, unknown>;
@@ -87,6 +92,9 @@ async function handleFunctionCall(body: RetellWebhookBody): Promise<RetellFuncti
     case 'get_properties_for_customer':
       return handleGetProperties(session);
 
+    case 'match_property':
+      return handleMatchProperty(session, args);
+
     case 'get_pricebook_items':
       return handleGetPricebookItems(session, args);
 
@@ -96,8 +104,14 @@ async function handleFunctionCall(body: RetellWebhookBody): Promise<RetellFuncti
     case 'get_departments':
       return handleGetDepartments(session);
 
-    case 'create_job':
-      return handleCreateJob(session, ctx, args);
+    case 'prepare_job':
+      return handlePrepareJob(session, ctx, args);
+
+    case 'save_caller_number':
+      return handleSaveCallerNumber(session, args);
+
+    case 'add_representative':
+      return handleAddRepresentative(session, args);
 
     case 'add_task_to_job':
       return handleAddTaskToJob(session, ctx, args);

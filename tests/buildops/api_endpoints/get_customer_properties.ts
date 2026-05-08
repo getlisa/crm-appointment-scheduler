@@ -49,7 +49,7 @@ function parseCSVLine(line: string): string[] {
 }
 
 function lookupCustomerByPhone(phone: string): { id: string; name: string } {
-  const csvPath = path.resolve(__dirname, 'customers.csv');
+  const csvPath = path.resolve(__dirname, '../output/customers.csv');
   const lines = fs.readFileSync(csvPath, 'utf-8').trim().split('\n');
   const headers = lines[0].split(',');
   const idIdx = headers.indexOf('id');

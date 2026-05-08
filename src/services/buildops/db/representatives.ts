@@ -75,7 +75,7 @@ export async function getRepsByProperty(
 export interface CreateRepInput {
   tenantId: string;
   customerId: string;
-  propertyId: string;
+  propertyId?: string | null;
   firstName: string;
   lastName: string;
   cellPhone?: string | null;
@@ -97,7 +97,7 @@ export async function createRepresentative(
     .insert({
       tenant_id: input.tenantId,
       customer_id: input.customerId,
-      property_id: input.propertyId,
+      property_id: input.propertyId ?? null,
       first_name: input.firstName,
       last_name: input.lastName,
       cell_phone: input.cellPhone ?? null,
