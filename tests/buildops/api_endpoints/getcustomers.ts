@@ -20,6 +20,8 @@ const CSV_FIELDS = [
   'logoUrl', 'websiteUrl', 'version', 'tenantId', 'tenantCompanyId', 'amountNotToExceed',
   'all_numbers',
   'all_numbers_sources',
+  'addresses_all',
+  'properties_all',
 ];
 
 type PhoneEntry = { phone: string; source: string };
@@ -111,6 +113,26 @@ function loadPropertyPhoneMap(outDir: string): Map<string, PhoneEntry[]> {
   return map;
 }
 
+function loadPropertyIdMap(outDir: string): Map<string, string[]> {
+  const csvPath = path.resolve(outDir, 'properties.csv');
+  if (!fs.existsSync(csvPath)) return new Map();
+  const lines = fs.readFileSync(csvPath, 'utf-8').trim().split('\n');
+  const headers = lines[0].split(',');
+  const idIdx  = headers.indexOf('id');
+  const cidIdx = headers.indexOf('customerId');
+  const map = new Map<string, string[]>();
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',');
+    const cid = cols[cidIdx]?.trim();
+    const pid = cols[idIdx]?.trim();
+    if (!cid || !pid) continue;
+    const ids = map.get(cid) ?? [];
+    ids.push(pid);
+    map.set(cid, ids);
+  }
+  return map;
+}
+
 async function getAllCustomers() {
   const token = await getAccessToken();
   console.log('Token acquired.');
@@ -133,8 +155,9 @@ async function getAllCustomers() {
   fs.mkdirSync(outDir, { recursive: true });
 
   const propPhoneMap = loadPropertyPhoneMap(outDir);
+  const propIdMap    = loadPropertyIdMap(outDir);
 
-  // Build all_numbers per customer
+  // Build all_numbers, addresses_all, properties_all per customer
   console.log('\nFetching representative phones (this may take a while)...');
 
   for (let i = 0; i < allItems.length; i++) {
@@ -167,6 +190,23 @@ async function getAllCustomers() {
 
     c['all_numbers'] = JSON.stringify(allNumbers);
     c['all_numbers_sources'] = JSON.stringify(allSources);
+
+    // addresses_all — from the inline addresses object returned by the list endpoint
+    const addrObj = c['addresses'] as { items?: Record<string, unknown>[] } | null;
+    const addrItems = addrObj?.items ?? [];
+    const addressesAll = addrItems.map(a => ({
+      id: a['id'],
+      addressLine1: a['addressLine1'],
+      addressLine2: a['addressLine2'],
+      city: a['city'],
+      state: a['state'],
+      zipcode: a['zipcode'],
+      addressType: a['addressType'],
+    }));
+    c['addresses_all'] = JSON.stringify(addressesAll);
+
+    // properties_all — IDs of BuildOps properties linked to this customer
+    c['properties_all'] = JSON.stringify(propIdMap.get(cid) ?? []);
   }
   console.log();
 
