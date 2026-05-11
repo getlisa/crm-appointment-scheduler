@@ -155,6 +155,45 @@ export async function createProperty(
   return { propertyId: res.id };
 }
 
+// ── Representatives ───────────────────────────────────────────────────────────
+
+export interface RepresentativePhoneItem {
+  id: string;
+  cellPhone: string | null;
+  landlinePhone: string | null;
+}
+
+export async function getCustomerRepresentatives(
+  ctx: BuildOpsContext,
+  buildopsCustomerId: string,
+): Promise<RepresentativePhoneItem[]> {
+  const PAGE_SIZE = 100;
+  const results: RepresentativePhoneItem[] = [];
+  let page = 0;
+
+  while (true) {
+    const data = await request<{ totalCount?: number; items?: RepresentativePhoneItem[] }>(
+      ctx, 'GET', `/v1/customers/${buildopsCustomerId}/our-representatives?page=${page}&page_size=${PAGE_SIZE}`,
+    );
+    const items = data.items ?? [];
+    results.push(...items);
+    if (items.length < PAGE_SIZE) break;
+    page++;
+  }
+
+  return results;
+}
+
+export async function createCustomerRepresentative(
+  ctx: BuildOpsContext,
+  buildopsCustomerId: string,
+  data: { firstName: string; lastName: string; cellPhone?: string | null; landlinePhone?: string | null },
+): Promise<{ id: string }> {
+  return request<{ id: string }>(
+    ctx, 'POST', `/v1/customers/${buildopsCustomerId}/representatives`, data,
+  );
+}
+
 // ── Paginated customer list (used by cron, not mid-call) ──────────────────────
 
 export async function getAllCustomers(ctx: BuildOpsContext): Promise<unknown[]> {

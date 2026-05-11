@@ -38,6 +38,8 @@ export interface CustomerRow {
   propertyAddresses?: AddressObj[];
   normalizedPhonePrimary: string | null;
   normalizedPhoneSecondary: string | null;
+  priceBookId: string | null;
+  allNumbers: string[];
 }
 
 export interface RepresentativeRow {
@@ -175,6 +177,7 @@ export interface PendingJobData {
   status: JobStatus;
   propertyAddress?: AddressObj;
   jobTypeName?: string;
+  needsReview?: boolean;
   tasks: PendingTaskData[];
 }
 

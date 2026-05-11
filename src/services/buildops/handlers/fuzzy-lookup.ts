@@ -1,6 +1,11 @@
 import { getFuzzyCandidates } from '../db/customers.js';
 import { setMatchedCustomer, setCallStatus } from '../db/inbound-calls.js';
-import { scoreCandidates, applyThreshold, normalizePhoneLast10 } from '../fuzzy-search.js';
+import {
+  normalizePhoneLast10,
+  computeMatchSignals,
+  assignTier,
+  crossValidate,
+} from '../fuzzy-search.js';
 import type { InboundCallRow, FuzzyQuery, RetellFunctionResult } from '../types.js';
 
 export async function handleLookupFuzzy(
@@ -22,60 +27,141 @@ export async function handleLookupFuzzy(
   }
 
   const candidates = await getFuzzyCandidates(session.tenantId, query);
-  const scored = scoreCandidates(query, candidates);
-  const decision = applyThreshold(scored);
 
-  if (decision.band === 'accept') {
-    await setMatchedCustomer(session.retellCallId, decision.candidate.id);
-
-    const callerLast10 = session.caller ? normalizePhoneLast10(session.caller) : null;
-    const newNumberDetected =
-      callerLast10 !== null &&
-      callerLast10 !== decision.candidate.normalizedPhonePrimary &&
-      callerLast10 !== decision.candidate.normalizedPhoneSecondary;
-
+  if (candidates.length === 0) {
+    await setCallStatus(session.retellCallId, 'handed_off');
     return {
       result: JSON.stringify({
-        status: 'found',
-        identified: true,
-        confidence: scored[0]?.score ?? 1,
-        customer_id: decision.candidate.id,
-        customer_name: decision.candidate.name,
-        new_number_detected: newNumberDetected,
-        address: decision.candidate.addresses?.[0] ?? null,
+        status: 'not_found',
+        identified: false,
+        message: 'no_matches',
       }),
     };
   }
 
-  if (decision.band === 'disambiguate') {
+  const callerPhone = session.caller ? normalizePhoneLast10(session.caller) : undefined;
+  const queryPhone  = query.oldPhone ? normalizePhoneLast10(query.oldPhone) : callerPhone;
+  const queryName   = query.name;
+  const queryAddr   = query.propertyAddress ?? query.address;
+
+  // Aggregate stats from the candidate set (within-tenant approximation)
+  const phoneCounts = new Map<string, number>();
+  const nameCounts  = new Map<string, number>();
+  for (const c of candidates) {
+    const key = (c.name ?? '').toLowerCase().trim();
+    nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
+    if (queryPhone) {
+      for (const p of c.allNumbers) {
+        if (p === queryPhone) phoneCounts.set(queryPhone, (phoneCounts.get(queryPhone) ?? 0) + 1);
+      }
+    }
+  }
+
+  // Rate each candidate with signals + tier
+  const rated = candidates.map(c => {
+    const nameKey = (c.name ?? '').toLowerCase().trim();
+    const stats = {
+      locationsForCompany: nameCounts.get(nameKey) ?? 1,
+      locationsForExactPhone: queryPhone ? (phoneCounts.get(queryPhone) ?? 0) : 0,
+    };
+    const signals = computeMatchSignals(queryName, queryAddr, queryPhone, c, stats);
+    const tier    = assignTier(signals);
+    return { customer: c, signals, tier };
+  });
+
+  // Sort: tier asc → addressSimilarity desc → companyNameFuzzy desc
+  rated.sort((a, b) =>
+    a.tier.tier !== b.tier.tier
+      ? a.tier.tier - b.tier.tier
+      : b.signals.addressSimilarity - a.signals.addressSimilarity ||
+        b.signals.companyNameFuzzy  - a.signals.companyNameFuzzy,
+  );
+
+  const tier1 = rated.filter(r => r.tier.tier === 1);
+  const tier2 = rated.filter(r => r.tier.tier === 2);
+
+  // ── Pre-tree: full name + address given, address found, but name clearly mismatches ──
+  // e.g. "Rahul Jason" + "2 London Road" where records are "Rahul Saxena" / "Rahul Singh"
+  if (rated[0]?.signals.queryHasFullName && queryAddr) {
+    const addrMatches = rated.filter(r => r.signals.addressQueryMatch || r.signals.addressMatch);
+    if (addrMatches.length > 0 && addrMatches.every(r => r.signals.nameMismatch)) {
+      await setCallStatus(session.retellCallId, 'handed_off');
+      return {
+        result: JSON.stringify({
+          status: 'not_found',
+          identified: false,
+          message: 'name_address_mismatch',
+        }),
+      };
+    }
+  }
+
+  // Shared accept path — stores matched customer and builds response
+  const accept = async (
+    r: (typeof rated)[0],
+    confidenceTier: 1 | 2,
+  ): Promise<RetellFunctionResult> => {
+    await setMatchedCustomer(session.retellCallId, r.customer.id);
+    const newNumberDetected = !!callerPhone && !r.customer.allNumbers.includes(callerPhone);
+    return {
+      result: JSON.stringify({
+        status: 'found',
+        identified: true,
+        confidence_tier: confidenceTier,
+        requires_review: confidenceTier === 2,
+        customer_id: r.customer.id,
+        customer_name: r.customer.name,
+        new_number_detected: newNumberDetected,
+        address: r.customer.addresses?.[0] ?? null,
+        tier_reason: r.tier.rule,
+      }),
+    };
+  };
+
+  // ── Tier 1 — high confidence → auto-create job ──────────────────────────────
+  if (tier1.length > 0) {
+    const best = tier1[0];
+    const cv = crossValidate(queryName, queryAddr, queryPhone, best.signals);
+    if (cv.pass) return accept(best, 1);
+    await setCallStatus(session.retellCallId, 'handed_off');
+    return {
+      result: JSON.stringify({
+        status: 'not_found',
+        identified: false,
+        message: cv.reason ?? 'retell_data_mismatch',
+      }),
+    };
+  }
+
+  // ── Tier 2 — medium confidence → job + review ───────────────────────────────
+  if (tier2.length > 0) {
+    const uniqueIds = [...new Set(tier2.map(r => r.customer.id))];
+    if (uniqueIds.length === 1) return accept(tier2[0], 2);
+    // Multiple Tier 2 candidates pointing to different customers → disambiguate
+    // When all are weak-name matches (first-name-only), tell the agent to ask for the last name
+    const needLastName = tier2.every(r => r.signals.nameMatchWeak);
     return {
       result: JSON.stringify({
         status: 'multiple_matches',
         identified: false,
-        confidence: scored[0]?.score ?? 0,
-        customer_id: null,
-        customer_name: null,
-        new_number_detected: false,
-        candidates: decision.candidates.map(c => ({
-          id: c.id,
-          name: c.name,
-          address: c.addresses?.[0] ?? null,
+        ...(needLastName ? { message: 'need_last_name' } : {}),
+        candidates: tier2.slice(0, 3).map(r => ({
+          id: r.customer.id,
+          name: r.customer.name,
+          address: r.customer.addresses?.[0] ?? null,
+          tier_reason: r.tier.rule,
         })),
       }),
     };
   }
 
-  // Handoff — no confident match found
+  // ── Tier 3 — low confidence → transfer ─────────────────────────────────────
   await setCallStatus(session.retellCallId, 'handed_off');
   return {
     result: JSON.stringify({
       status: 'not_found',
       identified: false,
-      confidence: scored[0]?.score ?? 0,
-      customer_id: null,
-      customer_name: null,
-      new_number_detected: false,
-      message: "I wasn't able to find your account. I'm not finding that account in our system.",
+      message: 'low_confidence_matches',
     }),
   };
 }

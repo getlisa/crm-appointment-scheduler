@@ -25,6 +25,7 @@ import {
   handleSaveCallerNumber,
   handleAddRepresentative,
 } from '../services/buildops/handlers/representative.js';
+import { handleTransferCall } from '../services/buildops/handlers/transfer.js';
 import type {
   RetellWebhookBody,
   RetellFunctionResult,
@@ -108,10 +109,13 @@ export async function handleFunctionCall(body: RetellWebhookBody): Promise<Retel
       return handlePrepareJob(session, ctx, args);
 
     case 'save_caller_number':
-      return handleSaveCallerNumber(session, args);
+      return handleSaveCallerNumber(session, ctx, args);
 
     case 'add_representative':
-      return handleAddRepresentative(session, args);
+      return handleAddRepresentative(session, ctx, args);
+
+    case 'transfer_call':
+      return handleTransferCall(session, args);
 
     case 'add_task_to_job':
       return handleAddTaskToJob(session, ctx, args);

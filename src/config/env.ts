@@ -20,6 +20,7 @@ const envSchema = z.object({
   BASE_URL: z.string().url(),
   LLM_ID: z.string().optional(),
   BUILDOPS_API_URL: z.string().url().optional(),
+  BUILDOPS_DEFAULT_JOB_TYPE_ID: z.string().min(1).optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -49,4 +50,5 @@ export const env = {
   retellBaseUrl: parsed.data.BASE_URL,
   retellLlmId: parsed.data.LLM_ID,
   buildopsApiUrl: parsed.data.BUILDOPS_API_URL ?? 'https://public-api.live.buildops.com',
+  buildopsDefaultJobTypeId: parsed.data.BUILDOPS_DEFAULT_JOB_TYPE_ID ?? null,
 };

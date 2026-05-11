@@ -13,6 +13,8 @@ function mapRow(row: Record<string, unknown>): CustomerRow {
     addresses: (row.addresses as AddressObj[]) ?? [],
     normalizedPhonePrimary: row.normalized_phone_primary as string | null,
     normalizedPhoneSecondary: row.normalized_phone_secondary as string | null,
+    priceBookId: (row.price_book_id as string | null) ?? null,
+    allNumbers: (row.all_numbers as string[]) ?? [],
   };
 }
 
@@ -20,17 +22,59 @@ export async function findCustomersByPhone(
   tenantId: string,
   phoneLast10: string,
 ): Promise<CustomerRow[]> {
-  const { data, error } = await supabase
+  // Primary: all_numbers covers customer + rep + property phones
+  const { data: primary } = await supabase
     .from('customers')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('is_active', true)
-    .or(
-      `normalized_phone_primary.eq.${phoneLast10},normalized_phone_secondary.eq.${phoneLast10}`,
-    );
+    .contains('all_numbers', [phoneLast10]);
 
-  if (error || !data) return [];
-  return (data as Record<string, unknown>[]).map(mapRow);
+  if (primary && primary.length > 0) {
+    return (primary as Record<string, unknown>[]).map(mapRow);
+  }
+
+  // Fallback: direct normalized columns (when all_numbers not yet populated)
+  const { data: fallback } = await supabase
+    .from('customers')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('is_active', true)
+    .or(`normalized_phone_primary.eq.${phoneLast10},normalized_phone_secondary.eq.${phoneLast10}`);
+
+  if (!fallback) return [];
+  return (fallback as Record<string, unknown>[]).map(mapRow);
+}
+
+export async function appendToCustomerAllNumbers(
+  tenantId: string,
+  customerId: string,
+  phone: string,
+  source: string,
+): Promise<void> {
+  const normalized = phone.replace(/\D/g, '').slice(-10);
+  if (normalized.length !== 10) return;
+
+  const { data } = await supabase
+    .from('customers')
+    .select('all_numbers, all_numbers_sources')
+    .eq('tenant_id', tenantId)
+    .eq('id', customerId)
+    .single();
+
+  const current = (data?.all_numbers as string[] | null) ?? [];
+  if (current.includes(normalized)) return;
+
+  const currentSources = (data?.all_numbers_sources as string[] | null) ?? [];
+
+  await supabase
+    .from('customers')
+    .update({
+      all_numbers: [...current, normalized],
+      all_numbers_sources: [...currentSources, source],
+    })
+    .eq('tenant_id', tenantId)
+    .eq('id', customerId);
 }
 
 export async function getFuzzyCandidates(

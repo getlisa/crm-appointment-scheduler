@@ -1,4 +1,5 @@
 import { createJob, createTask, getCustomer } from '../client.js';
+import { env } from '../../../config/env.js';
 import { getCustomerById } from '../db/customers.js';
 import { getPropertyById } from '../db/properties.js';
 import { setJobCreated, appendPendingJob } from '../db/inbound-calls.js';
@@ -75,18 +76,21 @@ export async function handlePrepareJob(
   }
 
   const customerPropertyId = args.customer_property_id as string | undefined;
-  const jobTypeId = args.job_type_id as string | undefined;
-  const jobTypeName = (args.job_type_name as string | undefined) ?? '';
-  const priceBookId = args.price_book_id as string | undefined;
-  const isUseTaxable = (args.is_use_taxable as boolean | undefined) ?? false;
+  const jobTypeName = (args.job_type_name as string | undefined) ?? 'Time & Material';
   const rawStatus = (args.status as string | undefined) ?? 'Open';
-  const rawTasks = (args.tasks as unknown[] | undefined) ?? [];
+  const rawTasks   = (args.tasks as unknown[] | undefined) ?? [];
+  const needsReview = !!(args.needs_review);
 
-  if (!customerPropertyId || !jobTypeId || !priceBookId) {
-    return {
-      result: 'error: customer_property_id, job_type_id, and price_book_id are all required',
-    };
+  if (!customerPropertyId) {
+    return { result: 'error: customer_property_id is required' };
   }
+
+  const jobTypeId = env.buildopsDefaultJobTypeId;
+  if (!jobTypeId) {
+    return { result: 'error: BUILDOPS_DEFAULT_JOB_TYPE_ID is not configured on the server' };
+  }
+
+  const isUseTaxable = false;
 
   const status: JobStatus = ALLOWED_STATUSES.includes(rawStatus as JobStatus)
     ? (rawStatus as JobStatus)
@@ -95,6 +99,11 @@ export async function handlePrepareJob(
   const customer = await getCustomerById(session.tenantId, session.matchedCustomerId);
   if (!customer) {
     return { result: 'error: could not load customer record' };
+  }
+
+  const priceBookId = customer.priceBookId;
+  if (!priceBookId) {
+    return { result: 'error: no priceBookId on customer record — re-run getcustomers.ts sync' };
   }
 
   const liveCustomer = await getCustomer(ctx, customer.buildopsCustomerId).catch(() => null);
@@ -135,6 +144,7 @@ export async function handlePrepareJob(
     status,
     propertyAddress: property.address,
     jobTypeName,
+    needsReview,
     tasks,
   };
 
@@ -143,6 +153,7 @@ export async function handlePrepareJob(
   return {
     result: JSON.stringify({
       status: 'ready',
+      needs_review: needsReview,
       summary: {
         property_address: property.address,
         job_type: jobTypeName || jobTypeId,
