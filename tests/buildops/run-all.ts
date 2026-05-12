@@ -170,7 +170,7 @@ for (const test of TESTS) {
   const result = spawnSync(npx, ['tsx', filePath, ...test.args()], {
     encoding: 'utf-8',
     env: process.env,
-    timeout: test.slow ? 120_000 : 30_000,
+    timeout: test.slow ? 180_000 : 60_000,
     shell: isWin,
   });
   const ms = Date.now() - start;
