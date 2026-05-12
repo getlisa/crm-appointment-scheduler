@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { env } from '../../../config/env.js';
 import { resolveByInboundNumber } from '../db/tenants.js';
 import { findCustomersByPhone } from '../db/customers.js';
+import { getPropertiesForCustomer } from '../db/properties.js';
 import {
   createInboundCall,
   getInboundCall,
@@ -62,6 +63,7 @@ retellRouter.post('/webhook', async (req, res) => {
       if (matches.length === 1) {
         await setMatchedCustomer(callId, matches[0].id);
         const customer = matches[0];
+        const properties = await getPropertiesForCustomer(customer.id);
         res.json({
           call_inbound: {
             override_agent_id: env.retellLlmId ?? undefined,
@@ -76,6 +78,8 @@ retellRouter.post('/webhook', async (req, res) => {
               address_count: String(customer.addresses?.length ?? 0),
               addresses: JSON.stringify(customer.addresses ?? []),
               multiple_matches: 'false',
+              property_count: String(properties.length),
+              property_id: properties.length === 1 ? properties[0].id : '',
             },
           },
         });
@@ -95,8 +99,13 @@ retellRouter.post('/webhook', async (req, res) => {
             from_number: fromNumber,
             new_number_detected: 'false',
             address_count: '0',
-            addresses: JSON.stringify(matches.map(m => ({ name: m.name, id: m.id }))),
+            addresses: JSON.stringify(matches.map(m => ({
+              name: m.name,
+              id: m.id,
+              address: m.addresses?.[0] ?? null,
+            }))),
             multiple_matches: 'true',
+            candidates_count: String(matches.length),
           },
         },
       });

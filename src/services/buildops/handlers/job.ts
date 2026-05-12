@@ -1,5 +1,4 @@
 import { createJob, createTask, getCustomer } from '../client.js';
-import { env } from '../../../config/env.js';
 import { getCustomerById } from '../db/customers.js';
 import { getPropertyById } from '../db/properties.js';
 import { setJobCreated, appendPendingJob } from '../db/inbound-calls.js';
@@ -13,6 +12,9 @@ import type {
   PendingJobData,
   PendingTaskData,
 } from '../types.js';
+
+const DEFAULT_JOB_TYPE_ID = '04df1a40-16b1-43f4-aa9b-8eafcec812ad';
+const DEFAULT_DEPARTMENT_ID = 'd87c1a38-4acd-459f-9b3f-446a810fae10'; // D2 Service Calls (T&M)
 
 const ALLOWED_STATUSES: JobStatus[] = ['Open', 'In Progress', 'On Hold', 'Cancelled'];
 
@@ -42,6 +44,7 @@ export async function executeJobCreation(
     customerId: customer.buildopsCustomerId,
     isUseTaxable: data.isUseTaxable,
     status: data.status,
+    departments: data.departmentId ? [{ id: data.departmentId }] : [],
   });
 
   await setJobCreated(session.retellCallId, jobResult.jobId);
@@ -76,18 +79,12 @@ export async function handlePrepareJob(
   }
 
   const customerPropertyId = args.customer_property_id as string | undefined;
-  const jobTypeName = (args.job_type_name as string | undefined) ?? 'Time & Material';
   const rawStatus = (args.status as string | undefined) ?? 'Open';
   const rawTasks   = (args.tasks as unknown[] | undefined) ?? [];
   const needsReview = !!(args.needs_review);
 
   if (!customerPropertyId) {
     return { result: 'error: customer_property_id is required' };
-  }
-
-  const jobTypeId = env.buildopsDefaultJobTypeId;
-  if (!jobTypeId) {
-    return { result: 'error: BUILDOPS_DEFAULT_JOB_TYPE_ID is not configured on the server' };
   }
 
   const isUseTaxable = false;
@@ -138,13 +135,13 @@ export async function handlePrepareJob(
 
   const pendingJob: PendingJobData = {
     customerPropertyId,
-    jobTypeId,
+    jobTypeId: DEFAULT_JOB_TYPE_ID,
     priceBookId,
     isUseTaxable,
     status,
     propertyAddress: property.address,
-    jobTypeName,
     needsReview,
+    departmentId: DEFAULT_DEPARTMENT_ID || null,
     tasks,
   };
 
@@ -156,7 +153,6 @@ export async function handlePrepareJob(
       needs_review: needsReview,
       summary: {
         property_address: property.address,
-        job_type: jobTypeName || jobTypeId,
         job_status: status,
         task_count: tasks.length,
       },

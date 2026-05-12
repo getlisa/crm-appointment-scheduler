@@ -6,7 +6,7 @@ export async function handleTransferCall(
   args: Record<string, unknown>,
 ): Promise<RetellFunctionResult> {
   const reason = (args.reason as string | undefined) ?? 'unspecified';
-  await setCallStatus(session.retellCallId, 'transferred').catch(() => undefined);
+  await setCallStatus(session.retellCallId, 'handed_off').catch(() => undefined);
   return {
     result: JSON.stringify({ status: 'transfer_initiated', reason }),
   };

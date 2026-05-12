@@ -1,0 +1,110 @@
+[
+  {
+    "type": "webhook",
+    "name": "lookup_customer_fuzzy",
+    "description": "Search for an existing customer by name, address, zip code, or a previously used phone number when the caller's current number was not recognized. Invoke when status is 'not_found' or when the caller provides additional identifying information. At least one of name, address, property_address, or zip must be provided.",
+    "speak_during_execution": true,
+    "speak_after_execution": false,
+    "execution_message_description": "Let me look that up for you.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name":             { "type": "string", "description": "Company or customer name as spoken by caller." },
+        "address":          { "type": "string", "description": "Billing or mailing address as spoken by caller." },
+        "property_address": { "type": "string", "description": "Service location address as spoken by caller." },
+        "zip":              { "type": "string", "description": "ZIP code as spoken by caller." },
+        "old_phone":        { "type": "string", "description": "A previously used phone number the caller provides." }
+      },
+      "required": []
+    }
+  },
+  {
+    "type": "webhook",
+    "name": "confirm_customer",
+    "description": "Confirm which customer the caller belongs to after a 'multiple_matches' response from lookup_customer_fuzzy. Read the candidate names and addresses to the caller, then invoke with the id of the one they confirm.",
+    "speak_during_execution": false,
+    "speak_after_execution": false,
+    "execution_message_description": "",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "candidate_id": { "type": "string", "description": "The id field from the chosen candidate in the candidates array returned by lookup_customer_fuzzy." }
+      },
+      "required": ["candidate_id"]
+    }
+  },
+  {
+    "type": "webhook",
+    "name": "match_property",
+    "description": "Fuzzy-match a spoken service address against the confirmed customer's properties to get the BuildOps property UUID required by prepare_job. Invoke when the customer has more than one address on file and the caller states which address the job is for. Use the returned property_id as customer_property_id in prepare_job.",
+    "speak_during_execution": true,
+    "speak_after_execution": false,
+    "execution_message_description": "Let me find that address.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "spoken_address": { "type": "string", "description": "The service location address as spoken by the caller." }
+      },
+      "required": ["spoken_address"]
+    }
+  },
+  {
+    "type": "webhook",
+    "name": "prepare_job",
+    "description": "Queue a service job to be created in BuildOps after the call ends. Invoke once the customer is confirmed, the service address is resolved, and the service request is understood. Always set needs_review to true when the customer was matched with confidence_tier 2. Use the property_id from match_property as customer_property_id.",
+    "speak_during_execution": false,
+    "speak_after_execution": false,
+    "execution_message_description": "",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "customer_property_id": { "type": "string",  "description": "BuildOps property UUID for the service address. Use the property_id returned by match_property." },
+        "status":               { "type": "string",  "description": "Initial job status: Open, In Progress, On Hold, or Cancelled. Defaults to Open." },
+        "needs_review":         { "type": "boolean", "description": "Set true if the customer was matched at confidence_tier 2 (medium confidence). Flags the job for manual verification." },
+        "tasks": {
+          "type": "array",
+          "description": "Optional task line items for the job.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "description": "Task display name shown on the work order." },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "product_id":  { "type": "string", "description": "BuildOps product UUID." },
+                    "description": { "type": "string", "description": "Optional line item description override." },
+                    "quantity":    { "type": "number", "description": "Number of units. Defaults to 1." }
+                  },
+                  "required": ["product_id"]
+                }
+              }
+            },
+            "required": ["name", "entries"]
+          }
+        }
+      },
+      "required": ["customer_property_id"]
+    }
+  },
+  {
+    "type": "webhook",
+    "name": "add_representative",
+    "description": "Save a newly detected caller number to the customer's BuildOps account by creating a representative entry. Invoke when new_number_detected is true after customer identification. Collect the caller's first and last name before invoking.",
+    "speak_during_execution": false,
+    "speak_after_execution": false,
+    "execution_message_description": "",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "first_name":  { "type": "string", "description": "Caller's first name." },
+        "last_name":   { "type": "string", "description": "Caller's last name." },
+        "phone":       { "type": "string", "description": "Phone number to save. Omit to default to the caller's from_number." },
+        "email":       { "type": "string", "description": "Contact email (optional)." },
+        "property_id": { "type": "string", "description": "BuildOps property UUID to associate this representative with (optional)." }
+      },
+      "required": ["first_name", "last_name"]
+    }
+  }
+]

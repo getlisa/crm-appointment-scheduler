@@ -1,6 +1,7 @@
 import { getCustomerById } from '../db/customers.js';
 import { getPropertiesForCustomer } from '../db/properties.js';
-import { setMatchedCustomer } from '../db/inbound-calls.js';
+import { setMatchedCustomer, setCallStatus } from '../db/inbound-calls.js';
+
 import { tokenSetRatio, normalizeAddress } from '../fuzzy-search.js';
 import type { InboundCallRow, PropertyRow, RetellFunctionResult } from '../types.js';
 
@@ -19,6 +20,7 @@ export async function handleConfirmCustomer(
   }
 
   await setMatchedCustomer(session.retellCallId, customer.id);
+  const properties = await getPropertiesForCustomer(customer.id);
   return {
     result: JSON.stringify({
       status: 'confirmed',
@@ -27,6 +29,8 @@ export async function handleConfirmCustomer(
         name: customer.name,
         address: customer.addresses?.[0] ?? null,
       },
+      property_count: properties.length,
+      ...(properties.length === 1 ? { property_id: properties[0].id } : {}),
     }),
   };
 }
@@ -102,11 +106,12 @@ export async function handleMatchProperty(
   const second = scored[1];
 
   if (best.score < MATCH_CONFIDENT) {
+    await setCallStatus(session.retellCallId, 'handed_off');
     return {
       result: JSON.stringify({
-        status: 'no_match',
-        spoken: spokenAddress,
-        candidates: scored.slice(0, 3).map(s => ({ id: s.property.id, address: s.property.address })),
+        status: 'not_found',
+        identified: false,
+        message: 'address_not_matched',
       }),
     };
   }

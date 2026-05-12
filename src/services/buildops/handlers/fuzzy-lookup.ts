@@ -1,5 +1,6 @@
 import { getFuzzyCandidates } from '../db/customers.js';
 import { setMatchedCustomer, setCallStatus } from '../db/inbound-calls.js';
+import { getPropertiesForCustomer } from '../db/properties.js';
 import {
   normalizePhoneLast10,
   computeMatchSignals,
@@ -103,6 +104,7 @@ export async function handleLookupFuzzy(
   ): Promise<RetellFunctionResult> => {
     await setMatchedCustomer(session.retellCallId, r.customer.id);
     const newNumberDetected = !!callerPhone && !r.customer.allNumbers.includes(callerPhone);
+    const properties = await getPropertiesForCustomer(r.customer.id);
     return {
       result: JSON.stringify({
         status: 'found',
@@ -114,6 +116,8 @@ export async function handleLookupFuzzy(
         new_number_detected: newNumberDetected,
         address: r.customer.addresses?.[0] ?? null,
         tier_reason: r.tier.rule,
+        property_count: properties.length,
+        ...(properties.length === 1 ? { property_id: properties[0].id } : {}),
       }),
     };
   };

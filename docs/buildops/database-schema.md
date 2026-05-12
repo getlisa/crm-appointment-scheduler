@@ -41,6 +41,26 @@ Local mirror of BuildOps customers. The primary lookup table for inbound calls �
 | `price_book_id` | TEXT | | BuildOps priceBookId for this customer. Copied onto every job created for this customer. |
 | `all_numbers` | TEXT[] | GIN INDEX | Deduplicated array of every phone number associated with this customer, normalized to last 10 digits. Sources include: customer primary/alternate, all representative cell and landline numbers, and all property phone numbers. Queried with `.contains()` for O(1) exact-phone lookup. |
 | `all_numbers_sources` | TEXT[] | | Parallel to `all_numbers`. Each element names the origin of the corresponding number (e.g. `customer:phonePrimary`, `rep:cellPhone:JohnSmith1`, `property:phonePrimary:abc-uuid`). Used to show which source a matched number came from and to avoid duplicates on re-sync. |
+| `account_number` | TEXT | | BuildOps accountNumber. |
+| `customer_type` | TEXT | | BuildOps customerType. |
+| `status` | TEXT | | Account status from BuildOps (e.g. `active`, `inactive`, `creditHold`, `suspended`, `collections`). Used by `handlePrepareJob` to block job creation for bad-standing accounts. |
+| `email` | TEXT | | Customer email. |
+| `customer_number` | TEXT | | BuildOps customerNumber. |
+| `credit_limit` | DECIMAL | | |
+| `is_taxable` | BOOLEAN | | |
+| `tax_rate_value` | DECIMAL | | |
+| `receive_sms` | BOOLEAN | | |
+| `invoice_delivery_pref` | TEXT | | |
+| `payment_term_id` | TEXT | | BuildOps UUID. |
+| `invoice_preset_id` | TEXT | | BuildOps UUID. |
+| `logo_url` | TEXT | | |
+| `website_url` | TEXT | | |
+| `version` | INTEGER | | BuildOps optimistic lock version. |
+| `amount_not_to_exceed` | DECIMAL | | |
+| `buildops_last_updated_at` | BIGINT | | `audit.lastUpdatedDateTime` (unix ms) — primary incremental-sync trigger. Compared per-row to detect changed customers without a full re-fetch. |
+| `buildops_created_at` | BIGINT | | `audit.createdDateTime` (unix ms). |
+| `representatives` | JSONB | | Embedded array of all representatives for this customer: `[{id, firstName, lastName, cellPhone, landlinePhone, email, propertyId, isActive, isDoNotCall, version}]`. Updated on every dirty-customer rebuild. |
+| `properties` | JSONB | | Embedded array of all properties for this customer: `[{id, companyName, phonePrimary, phoneAlternate, priceBookId, isTaxable, version, addresses:[{addressLine1, addressLine2, city, state, zipcode, addressType}]}]`. Updated on every dirty-customer rebuild. |
 
 **Recommended indexes:**
 - GIN on `all_numbers` — required for `contains` array queries
@@ -113,7 +133,7 @@ One row per Retell call. Created when the call starts (`call_started` webhook) a
 | `matched_customer_id` | TEXT | | Our `customers.id` — set once the customer is identified during the call. NULL until identification succeeds. |
 | `status` | TEXT | NOT NULL DEFAULT 'active' | Call lifecycle state. Values: `active` → `job_created` (after `call_ended` processes the job) or `handed_off` (transferred to human) or `ended`. |
 | `buildops_job_id` | TEXT | | BuildOps job UUID — set after `executeJobCreation` completes post-call. |
-| `pending_jobs` | JSONB | NOT NULL DEFAULT '[]' | Array of `PendingJobData` objects collected during the call. Each element contains all the data needed to call `POST /v1/jobs` after the call ends (property ID, job type, price book, tasks, review flag, etc.). Populated via `append_pending_job`. |
+| `pending_jobs` | JSONB | NOT NULL DEFAULT '[]' | Array of `PendingJobData` objects collected during the call. Each element contains all the data needed to call `POST /v1/jobs` after the call ends. Schema: `{customerPropertyId, jobTypeId, priceBookId, isUseTaxable, status, propertyAddress?, needsReview?, departmentId?, tasks[]}`. `jobTypeId` and `departmentId` are populated server-side from hardcoded defaults — not from the agent. Populated via `append_pending_job`. |
 
 ---
 
@@ -131,8 +151,8 @@ Local mirror of every job created through the integration. Used for audit, repor
 | `customer_name` | TEXT | | Denormalized customer name at job creation time. |
 | `customer_id` | TEXT | | BuildOps customer UUID. |
 | `job_type_id` | TEXT | | BuildOps job type UUID. |
-| `job_type_name` | TEXT | | Display name of the job type (e.g. `Time & Material`). |
-| `price_book_id` | TEXT | | Price book UUID used for the job. |
+| `job_type_name` | TEXT | | Display name of the job type. Not populated by our handler (NULL); present for future use if the BuildOps API response is mapped here. |
+| `price_book_id` | TEXT | | Price book UUID used for the job. Sourced from `customers.price_book_id`. |
 | `priority` | TEXT | | Job priority level if set. |
 | `version` | INTEGER | DEFAULT 0 | BuildOps optimistic lock version. |
 | `billing_status` | TEXT | | From BuildOps job response. |
@@ -151,7 +171,7 @@ Local mirror of every job created through the integration. Used for audit, repor
 
 ### `departments`
 
-Local copy of BuildOps departments (used for job tagging). Synced separately.
+Local copy of BuildOps departments. Synced separately. **Not queried during live calls** — the department attached to every created job is resolved from the hardcoded constant `DEFAULT_DEPARTMENT_ID` in `src/services/buildops/handlers/job.ts` ("D2 Service Calls (T&M)", ID `d87c1a38-4acd-459f-9b3f-446a810fae10`). Run `scripts/get_department_id.ts` if the ID ever needs to be updated.
 
 | Column | Type | Constraints | Purpose |
 |---|---|---|---|
@@ -160,95 +180,67 @@ Local copy of BuildOps departments (used for job tagging). Synced separately.
 | `tenant_id` | UUID | NOT NULL | |
 | `phone_primary` | TEXT | | Department contact number. |
 | `email` | TEXT | | |
-| `is_active` | BOOLEAN | DEFAULT true | Inactive departments are excluded from agent lookups. |
+| `is_active` | BOOLEAN | DEFAULT true | |
 
 ---
-
-### `pricebook_items`
-
-Local copy of BuildOps pricebook entries. Queried during a call when the agent needs to attach line items (tasks) to a job.
-
-| Column | Type | Constraints | Purpose |
-|---|---|---|---|
-| `id` | UUID | PRIMARY KEY | |
-| `tenant_id` | UUID | NOT NULL | |
-| `product_id` | TEXT | NOT NULL | BuildOps product UUID. Sent to `POST /v1/jobs/{id}/tasks` as `entries[].productId`. |
-| `name` | TEXT | NOT NULL | Product display name. Full-text searched when the agent looks up a service or part. |
-| `description` | TEXT | | Extended description. Also searched. |
-| `unit_price` | DECIMAL | | Unit price from BuildOps. Shown to agent for quoting context. |
-| `taxable` | BOOLEAN | DEFAULT false | Whether this item is taxable. |
-| `is_active` | BOOLEAN | DEFAULT true | Inactive items are excluded from search results. |
 
 ---
 
 ## Sync Jobs
 
-These jobs keep the local Supabase tables in sync with BuildOps. They run on a schedule and do not affect live call handling directly — the call path reads only from Supabase.
+These jobs keep the local Supabase tables and `customers.csv` in sync with BuildOps. They run on a schedule and do not affect live call handling directly — the call path reads only from Supabase.
 
 ---
 
-### 1. Full Customer + Representative Sync
+### 1. Full Customer Sync (`scripts/buildops/cron/full-sync.ts`)
 
-**Purpose:** Populate (or fully refresh) the `customers` table with every active and inactive customer from BuildOps, including all phone numbers from the customer record, their representatives, and their associated properties.
+**Purpose:** Populate (or fully rebuild) `customers.csv` with every customer from BuildOps, including embedded representatives and properties. Run this first before any incremental sync.
 
-**Trigger:** Manual first run; then daily (off-peak hours) as a scheduled cron.
+**Trigger:** Manual first run; daily at off-peak hours.
 
 **Steps:**
-1. Authenticate with BuildOps using the tenant's `client_id` and `client_secret`, obtain a fresh access token.
-2. Fetch all customers via `GET /v1/customers` (paginated, 200 per page, `include_inactive=true`).
-3. For each customer:
-   - Fetch all representatives via `GET /v1/customers/{id}/our-representatives` (paginated, 100 per page).
-   - Collect phone numbers from: customer `phonePrimary`, customer `phoneAlternate`, each representative's `cellPhone` and `landlinePhone`, and each property's `phonePrimary` and `phoneAlternate` (loaded from a properties snapshot).
-   - Normalize every number to last-10 digits; deduplicate.
-   - Build `all_numbers_sources` as a parallel array recording the origin of each number.
-   - Build `addresses_all` from the customer's address items.
-   - Build `properties_all` from the properties snapshot keyed by `customerId`.
-4. Upsert each row into `customers` on `(tenant_id, buildops_customer_id)`.
-5. Write a `sync_state.json` file recording: `lastRunAt`, `lastSyncedMs`, per-customer `versions`, per-property `propertyVersions`.
-
-**State file schema (`sync_state.json`):**
-```json
-{
-  "lastRunAt": "2025-05-11T04:00:00.000Z",
-  "lastSyncedMs": 1746936000000,
-  "versions": { "<buildops_customer_id>": <version_int> },
-  "propertyVersions": { "<buildops_property_id>": <version_int> }
-}
-```
+1. Authenticate with BuildOps via `POST /v1/auth/token`; obtain access token.
+2. Fetch all properties (paginated, 100/page, `include_addresses=true`) — build `propMap` (`customerId → PropertySummary[]`) and `propPhoneMap` (`customerId → PhoneEntry[]`).
+3. Fetch all customers (paginated, 100/page, `include_inactive=true`).
+4. For every customer:
+   - Fetch all representatives via `GET /v1/customers/{id}/our-representatives` (paginated, 100/page).
+   - Build `all_numbers` + `all_numbers_sources` (customer phones → rep phones → property phones, deduplicated, first source wins).
+   - Build `addresses_all` from `customer.addresses.items`.
+   - Set `representatives` JSON from fetched reps.
+   - Set `properties` JSON from `propMap`.
+   - Set `last_updated` from `audit.lastUpdatedDateTime`; `last_added` from `audit.createdDateTime`.
+5. Write `scripts/buildops/output/customers.csv`.
+6. Write `sync_state.json` with `lastSyncedMs = max(last_updated across all customers)`.
 
 ---
 
-### 2. Incremental Customer Sync
+### 2. Incremental Customer Sync (`scripts/buildops/cron/incremental-sync.ts`)
 
-**Purpose:** Apply only the changes since the last sync without re-fetching every customer. Intended to run every 15–30 minutes during business hours.
+**Purpose:** Re-build only changed customers. Intended to run every 15–30 minutes.
 
-**Trigger:** Scheduled cron (15–30 min interval).
+**Trigger:** Scheduled cron (15–30 min interval). Requires `customers.csv` to exist (run full sync first).
+
+**Dirty detection — three independent sources, all evaluated before the customer loop:**
+
+| Source | Trigger condition | Action |
+|---|---|---|
+| Customer timestamp | `customer.audit.lastUpdatedDateTime > existing_row.last_updated` | Mark customer dirty |
+| Property change | `property.audit.lastUpdatedDateTime > existingCustomerRow.last_updated` | Mark parent customer dirty |
+| Representative change | `SELECT DISTINCT customer_id FROM representatives WHERE updated_at > lastSyncedMs` | Mark those customers dirty |
 
 **Steps:**
-1. Load `sync_state.json` to get `lastSyncedMs`.
-2. Fetch customers where `audit.lastUpdatedDateTime > lastSyncedMs`.
-3. For each changed customer, run the same representative + property phone collection as in the full sync.
-4. Upsert only the changed rows. Skip rows where `version` in the response matches the stored version.
-5. Update `sync_state.json` with new timestamps and versions.
+1. Authenticate + init Supabase client.
+2. Load `customers.csv` → `existingRows` map; compute `lastSyncedMs = min(last_updated across all rows)`.
+3. Batch-query Supabase `representatives` for rows with `updated_at > lastSyncedMs` → add their `customer_id` to `dirtySet`.
+4. Fetch all properties (100/page, `include_addresses=true`) → build `propMap` + `propPhoneMap`; property-dirty customers added to `dirtySet`.
+5. Fetch all customers (100/page) — early-stop when a full page has all `lastUpdatedDateTime <= lastSyncedMs`.
+6. For each fetched customer: if dirty (by timestamp or in `dirtySet`) → fetch fresh reps, rebuild row; otherwise reuse existing row.
+7. For `dirtySet` customers not reached due to early-stop: re-fetch reps only and rebuild from existing CSV row.
+8. Write updated `customers.csv`; write `sync_state.json`.
 
 ---
 
-### 3. Property Sync
-
-**Purpose:** Keep the `property` table and the `properties.csv` snapshot current. Properties are service locations — their addresses and phone numbers feed into customer identification and job creation.
-
-**Trigger:** Daily (runs before the full customer sync so the property phone map is available).
-
-**Steps:**
-1. Fetch all properties via `GET /v1/properties` (paginated, 100 per page).
-2. For each property: extract `id`, `customerId`, `address`, `phonePrimary`, `phoneAlternate`, and metadata fields.
-3. Upsert into the `property` table on `id`.
-4. Write `properties.csv` snapshot (consumed by the customer sync to build `properties_all`).
-5. Update `sync_state.json` with per-property versions.
-
----
-
-### 4. Access Token Refresh
+### 3. Access Token Refresh
 
 **Purpose:** BuildOps access tokens have a limited TTL. This job exchanges the stored `client_id` + `client_secret` for a fresh token and writes it back to `buildops_tenants.access_token`.
 
@@ -262,13 +254,13 @@ These jobs keep the local Supabase tables in sync with BuildOps. They run on a s
 
 ---
 
-### 5. Pricebook Sync
+## Hardcoded Defaults (job creation)
 
-**Purpose:** Keep `pricebook_items` current so agents can look up services and parts by name during a call.
+Two values are resolved server-side at job creation time from constants in `src/services/buildops/handlers/job.ts` rather than from environment variables or agent input:
 
-**Trigger:** Daily or on-demand after a pricebook update in BuildOps.
+| Constant | Value | Meaning |
+|---|---|---|
+| `DEFAULT_JOB_TYPE_ID` | `04df1a40-16b1-43f4-aa9b-8eafcec812ad` | BuildOps job type for "Time & Material" |
+| `DEFAULT_DEPARTMENT_ID` | `d87c1a38-4acd-459f-9b3f-446a810fae10` | BuildOps department "D2 Service Calls (T&M)" |
 
-**Steps:**
-1. Fetch all pricebook items for the tenant from the BuildOps pricebook API.
-2. Upsert on `(tenant_id, product_id)`.
-3. Mark items no longer returned by the API as `is_active = false` (soft delete).
+To look up or verify the department ID: `npx tsx scripts/get_department_id.ts` (auto-refreshes the access token using `CLIENT_ID` / `CLIENT_SECRET` from `.env`).

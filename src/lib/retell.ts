@@ -12,11 +12,6 @@ import {
   handleGetProperties,
   handleMatchProperty,
 } from '../services/buildops/handlers/customer.js';
-import { handleGetPricebookItems } from '../services/buildops/handlers/pricebook.js';
-import {
-  handleGetJobTypes,
-  handleGetDepartments,
-} from '../services/buildops/handlers/job-types.js';
 import {
   handlePrepareJob,
   handleAddTaskToJob,
@@ -67,7 +62,7 @@ async function handleCallStarted(
 export async function handleFunctionCall(body: RetellWebhookBody): Promise<RetellFunctionResult> {
   const callId = body.call.call_id;
   const functionName = body.name ?? '';
-  const args = (body.arguments ?? {}) as Record<string, unknown>;
+  const args = (body.args ?? body.arguments ?? {}) as Record<string, unknown>;
 
   const session = await getInboundCall(callId);
   if (!session) {
@@ -95,15 +90,6 @@ export async function handleFunctionCall(body: RetellWebhookBody): Promise<Retel
 
     case 'match_property':
       return handleMatchProperty(session, args);
-
-    case 'get_pricebook_items':
-      return handleGetPricebookItems(session, args);
-
-    case 'get_job_types':
-      return handleGetJobTypes(session, ctx);
-
-    case 'get_departments':
-      return handleGetDepartments(session);
 
     case 'prepare_job':
       return handlePrepareJob(session, ctx, args);

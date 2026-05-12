@@ -176,8 +176,8 @@ export interface PendingJobData {
   isUseTaxable: boolean;
   status: JobStatus;
   propertyAddress?: AddressObj;
-  jobTypeName?: string;
   needsReview?: boolean;
+  departmentId?: string | null;
   tasks: PendingTaskData[];
 }
 
@@ -188,6 +188,7 @@ export interface CreateJobInput {
   customerId: string;
   isUseTaxable: boolean;
   status: JobStatus;
+  departments?: { id: string }[];
 }
 
 export interface TaskEntry {
@@ -223,6 +224,7 @@ export interface RetellWebhookBody {
   event: string;
   call: RetellCallPayload;
   name?: string;
+  args?: Record<string, unknown>;
   arguments?: Record<string, unknown>;
 }
 
