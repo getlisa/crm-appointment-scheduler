@@ -14,7 +14,7 @@ Holds one row per customer of ours (i.e. per HVAC company). Looked up by inbound
 
 | Column | Type | Constraints | Purpose |
 |---|---|---|---|
-| `no` | TEXT | PRIMARY KEY | E.164 number of the phone line Retell rings (e.g. `+18041234567`). Used as the lookup key when a call arrives. |
+| `no` | TEXT | PRIMARY KEY | E.164 number of the Retell phone line for this tenant (e.g. `+13014507341`). Used as the lookup key when a call arrives — the server does `WHERE no = <dialed_number>` at call start. |
 | `client_id` | TEXT | NOT NULL | BuildOps OAuth client ID for this tenant. |
 | `client_secret` | TEXT | NOT NULL | BuildOps OAuth client secret. Stored here; never logged. |
 | `access_token` | TEXT | NOT NULL | Current short-lived Bearer token. Refreshed by the auth cron. |
@@ -29,7 +29,7 @@ Local mirror of BuildOps customers. The primary lookup table for inbound calls �
 | Column | Type | Constraints | Purpose |
 |---|---|---|---|
 | `id` | UUID | PRIMARY KEY DEFAULT gen_random_uuid() | Our internal customer identifier. Referenced by `inbound_calls.matched_customer_id` and `representatives.customer_id`. |
-| `tenant_id` | UUID | NOT NULL, FK → buildops_tenants.no (or UUID equivalent) | Scopes the row to one HVAC company. |
+| `tenant_id` | TEXT | NOT NULL | BuildOps tenant UUID (`TENANT_ID` env var). Scopes the row to one HVAC company. No FK — decoupled from the phone-keyed `buildops_tenants` table so seeding doesn't require a tenant row. |
 | `buildops_customer_id` | TEXT | NOT NULL, UNIQUE per tenant | The BuildOps-assigned customer UUID. Used in all BuildOps API calls. |
 | `name` | TEXT | NOT NULL | Company / customer display name. Used in fuzzy name matching. |
 | `phone_primary` | TEXT | | Raw primary phone from BuildOps (may include formatting). |
@@ -242,15 +242,49 @@ These jobs keep the local Supabase tables and `customers.csv` in sync with Build
 
 ### 3. Access Token Refresh
 
-**Purpose:** BuildOps access tokens have a limited TTL. This job exchanges the stored `client_id` + `client_secret` for a fresh token and writes it back to `buildops_tenants.access_token`.
+**Purpose:** BuildOps access tokens have a limited TTL (~60 min). This job exchanges each tenant's stored `client_id` + `client_secret` for a fresh token and writes it back to `buildops_tenants.access_token`.
 
-**Trigger:** Every 50–55 minutes (before token expiry; exact interval depends on BuildOps TTL).
+**Implementation:** `scripts/buildops/cron/refresh_access_token.sql`
+— A PostgreSQL function (`public.refresh_buildops_access_tokens`) scheduled via **pg_cron + pg_net** (both enabled by default on Supabase). Install by running the SQL file in the Supabase SQL Editor.
 
-**Steps:**
-1. For each row in `buildops_tenants` where `is_active = true`:
-   - `POST /v1/auth/token` with `{clientId, clientSecret, tenantId}`.
-   - Update `access_token` in the row.
-2. Log result; alert on failure (a stale token blocks all live calls for that tenant).
+**Trigger:** Every 50 minutes (`*/50 * * * *`).
+
+**Steps (inside the SQL function):**
+1. For each row in `buildops_tenants`:
+   - `pg_net.http_post` → `POST /v1/auth/token` with `{clientId, clientSecret, tenantId}`.
+   - `net.http_collect_response(request_id, async := false)` blocks until the response arrives.
+   - On HTTP 200: extract `access_token` from response body, `UPDATE buildops_tenants SET access_token = …`.
+   - On failure: emit a `RAISE WARNING` (visible in Supabase Logs → Database).
+2. A stale token blocks all live calls for that tenant — monitor Supabase warnings if calls start failing auth.
+
+---
+
+## Initial Data Seeding
+
+**Script:** `scripts/buildops/seed-tables.ts`
+
+Seeds `buildops_tenants`, `buildops_customers`, `buildops_properties`, and `buildops_representatives` by pulling live data from the BuildOps API.
+
+**Required `.env` vars:**
+
+| Variable | Purpose |
+|---|---|
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key (bypasses RLS) |
+| `CLIENT_ID` | BuildOps OAuth client ID |
+| `CLIENT_SECRET` | BuildOps OAuth client secret |
+| `TENANT_ID` | BuildOps tenant UUID |
+| `INBOUND_PHONE` | E.164 Retell phone line for this tenant (e.g. `+13014507341`) |
+
+**Order of operations:**
+1. Authenticate → obtain `access_token` (written to `buildops_tenants`).
+2. Upsert `buildops_tenants` using `INBOUND_PHONE` as the primary key.
+3. Fetch all properties (with addresses) → upsert `buildops_properties`.
+4. Fetch all customers → for each, fetch representatives → upsert `buildops_customers` with embedded `representatives` + `properties` JSON, and insert into `buildops_representatives`.
+
+```bash
+npx tsx scripts/buildops/seed-tables.ts
+```
 
 ---
 

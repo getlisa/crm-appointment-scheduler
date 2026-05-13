@@ -21,39 +21,26 @@ create table if not exists public.buildops_tenants (
 -- Primary lookup table for inbound calls.
 -- ─────────────────────────────────────────────
 create table if not exists public.buildops_customers (
-  id                          uuid          primary key default gen_random_uuid(),
-  tenant_id                   text          not null references public.buildops_tenants(no),
-  buildops_customer_id        text          not null,
-  name                        text          not null,
-  phone_primary               text,
-  phone_secondary             text,
-  is_active                   boolean       not null default true,
-  addresses                   jsonb,
-  normalized_phone_primary    text,
-  normalized_phone_secondary  text,
-  price_book_id               text,
-  all_numbers                 text[],
-  all_numbers_sources         text[],
-  account_number              text,
-  customer_type               text,
-  status                      text,
-  email                       text,
-  customer_number             text,
-  credit_limit                decimal,
-  is_taxable                  boolean,
-  tax_rate_value              decimal,
-  receive_sms                 boolean,
-  invoice_delivery_pref       text,
-  payment_term_id             text,
-  invoice_preset_id           text,
-  logo_url                    text,
-  website_url                 text,
-  version                     integer,
-  amount_not_to_exceed        decimal,
-  buildops_last_updated_at    bigint,
-  buildops_created_at         bigint,
-  representatives             jsonb,
-  properties                  jsonb,
+  id                       uuid    primary key default gen_random_uuid(),
+  tenant_id                text    not null,   -- BuildOps tenant UUID
+  buildops_customer_id     text    not null,
+  name                     text    not null,
+  phone_primary            text,
+  phone_secondary          text,
+  is_active                boolean not null default true,
+  account_number           text,
+  customer_type            text,
+  status                   text,
+  email                    text,
+  customer_number          text,
+  price_book_id            text,
+  version                  integer,
+  buildops_last_updated_at bigint,
+  buildops_created_at      bigint,
+  all_numbers              text[],
+  all_numbers_sources      text[],
+  representatives          jsonb,
+  properties               jsonb,
   constraint customers_tenant_buildops_id_key unique (tenant_id, buildops_customer_id)
 );
 
@@ -66,18 +53,15 @@ create index if not exists idx_buildops_customers_tenant_id
 create index if not exists idx_buildops_customers_tenant_buildops_id
   on public.buildops_customers (tenant_id, buildops_customer_id);
 
-create index if not exists idx_buildops_customers_addresses
-  on public.buildops_customers using gin (addresses);
-
 -- ─────────────────────────────────────────────
--- property
+-- properties
 -- Mirror of BuildOps service locations.
 -- ─────────────────────────────────────────────
 create table if not exists public.buildops_properties (
   id             text    primary key,          -- BuildOps property UUID
   name           text,
   phone_primary  text,
-  customer_id    text    not null,             -- references buildops_customers.id
+  customer_id    text    not null,
   address        jsonb   not null              -- {line1, line2, city, state, zip}
 );
 
@@ -163,18 +147,4 @@ create table if not exists public.buildops_jobs (
   tenant_id             text      not null,
   audit                 jsonb,
   constraint jobs_tenant_job_id_key unique (tenant_id, job_id)
-);
-
--- ─────────────────────────────────────────────
--- departments
--- Local copy of BuildOps departments.
--- Not queried during live calls — hardcoded DEFAULT_DEPARTMENT_ID used instead.
--- ─────────────────────────────────────────────
-create table if not exists public.buildops_departments (
-  id             text     primary key,    -- BuildOps department UUID
-  tag_name       text     not null,
-  tenant_id      text     not null,
-  phone_primary  text,
-  email          text,
-  is_active      boolean  default true
 );
