@@ -11,12 +11,14 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET!;
 const TENANT_ID = process.env.TENANT_ID!;
 const BASE_URL = 'https://public-api.live.buildops.com/v1';
 
-// Usage: node create_job.ts <phone> "<jobTypeName|jobTypeId>"
-const INBOUND_PHONE  = process.argv[2];
-const JOB_TYPE_INPUT = process.argv[3];
+// Usage: node create_job.ts <phone> [jobTypeName|jobTypeId]
+const DEFAULT_JOB_TYPE_ID = '04df1a40-16b1-43f4-aa9b-8eafcec812ad';
 
-if (!INBOUND_PHONE || !JOB_TYPE_INPUT) {
-  console.error('Usage: node create_job.ts <inboundPhone> "<jobTypeName|jobTypeId>"');
+const INBOUND_PHONE  = process.argv[2];
+const JOB_TYPE_INPUT = process.argv[3] ?? DEFAULT_JOB_TYPE_ID;
+
+if (!INBOUND_PHONE) {
+  console.error('Usage: node create_job.ts <inboundPhone> [jobTypeName|jobTypeId]');
   process.exit(1);
 }
 
