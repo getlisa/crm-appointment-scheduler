@@ -21,6 +21,10 @@ function mapRow(row: Record<string, unknown>): CustomerRow {
     normalizedPhoneSecondary: row.normalized_phone_secondary as string | null,
     priceBookId: (row.price_book_id as string | null) ?? null,
     allNumbers: (row.all_numbers as string[]) ?? [],
+    propertyIds: (row.property_ids as string[]) ?? [],
+    representativeIds: (row.representative_ids as string[]) ?? [],
+    billingAddress: (row.billing_address as string | null) ?? null,
+    businessAddress: (row.business_address as string | null) ?? null,
   };
 }
 
