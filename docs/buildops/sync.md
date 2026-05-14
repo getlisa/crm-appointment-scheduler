@@ -4,43 +4,17 @@ Keeps the local Supabase tables in sync with BuildOps so inbound calls can ident
 
 ---
 
-## Three Implementations
+## Implementation
 
-| File | Mode | Output | When to use |
-|---|---|---|---|
-| `src/services/buildops/cron/full-sync.ts` | Full | `scripts/buildops/output/customers.csv` + `sync_state.json` | Initial seed or manual reset |
-| `src/services/buildops/cron/incremental-sync.ts` | Incremental | Updates the same CSV + state | Ongoing daily/on-demand updates |
-| `src/services/buildops/supabase/buildops-cron/index.ts` | Full + Incremental | Writes directly to Supabase tables | Deployed Supabase Edge Function (scheduled) |
-
-The CSV-based scripts (`full-sync.ts` / `incremental-sync.ts`) were used for the initial integration phase. The Supabase Edge Function is the production path that runs on a schedule.
-
----
-
-## Running the Scripts Manually
-
-Required env vars (`.env` or shell):
-
-```
-CLIENT_ID=<buildops_client_id>
-CLIENT_SECRET=<buildops_client_secret>
-TENANT_ID=<buildops_tenant_id>
-SUPABASE_URL=<project_url>
-SUPABASE_SERVICE_ROLE_KEY=<service_role_key>
-```
-
-```bash
-# Full sync (first run)
-npx tsx src/services/buildops/cron/full-sync.ts
-
-# Incremental sync (subsequent runs — requires existing customers.csv)
-npx tsx src/services/buildops/cron/incremental-sync.ts
-```
+| File | Mode | When to use |
+|---|---|---|
+| `src/services/buildops/supabase/buildops-cron/index.ts` | Full + Incremental | Deployed Supabase Edge Function (scheduled) |
 
 ---
 
 ## Full Sync
 
-### `full-sync.ts` / `fullSeed()` in the edge function
+### `fullSeed()` in the edge function
 
 Fetches every customer, property, and representative from BuildOps and writes a complete snapshot.
 
@@ -82,7 +56,7 @@ Fetches every customer, property, and representative from BuildOps and writes a 
 
 ## Incremental Sync
 
-### `incremental-sync.ts` / `incrementalSync()` in the edge function
+### `incrementalSync()` in the edge function
 
 Only rebuilds customers whose data has changed. Uses three independent dirty-detection sources evaluated before the main customer loop.
 
@@ -100,7 +74,7 @@ All five are evaluated independently and the results merged into a single `dirty
 
 ### Incremental Steps
 
-1. Load existing customer rows (CSV or Supabase DB) to build a `lastSyncedMs` boundary
+1. Load existing customer rows from Supabase to build a `lastSyncedMs` boundary
 2. Query Supabase `buildops_representatives` for all `(customer_id, updated_at)` → add any rep-updated customer IDs to `dirtySet`
 3. Fetch all properties → detect property-triggered dirty customers → add to `dirtySet`
 4. Page through all customers (`include_inactive=true`, 100/page):
@@ -110,7 +84,7 @@ All five are evaluated independently and the results merged into a single `dirty
 
 5. Handle dirty customers skipped by early-stop: for each `dirtySet` member that wasn't reached in the page scan, call `rebuildFromExisting()` — uses the stored customer scalars (name, phone, etc.) but fetches fresh reps and merges current property phones
 
-6. Write updated CSV / upsert to Supabase
+6. Upsert updated rows to Supabase
 7. Update watermark to `MAX(audit.lastUpdatedDateTime)` across all processed rows
 
 ### Deletion Handling

@@ -34,7 +34,14 @@ Handles inbound HVAC service calls routed through Retell AI. When a customer cal
 
 ### Endpoints
 
-- `POST /api/buildops/retell/webhook` — Retell AI webhook (call lifecycle + tool calls)
+- `POST /api/buildops/retell/webhook` — Retell lifecycle events (`call_inbound`, `call_ended`)
+- `POST /api/buildops/fn/lookup_customer_fuzzy` — Fuzzy name/address/zip customer search
+- `POST /api/buildops/fn/confirm_customer` — Confirm candidate from multiple matches
+- `POST /api/buildops/fn/match_property` — Fuzzy-match spoken address to a property
+- `POST /api/buildops/fn/prepare_job` — Account status check + job creation
+- `POST /api/buildops/fn/add_representative` — Create new contact on account
+- `POST /api/buildops/admin/tenant` — Register or update a tenant
+- `GET  /api/buildops/admin/tenants` — List all tenants (no secrets)
 
 ### How it works
 
@@ -45,18 +52,13 @@ Handles inbound HVAC service calls routed through Retell AI. When a customer cal
 
 ### Retell custom functions
 
-| Function | Handler | Purpose |
-|---|---|---|
-| `lookup_customer_by_phone` | `handleLookupByPhone` | GIN exact-match on caller's number |
-| `lookup_customer_fuzzy` | `handleLookupFuzzy` | Scored fuzzy search by name/address |
-| `confirm_customer` | `handleConfirmCustomer` | Disambiguate multiple matches |
-| `get_properties_for_customer` | `handleGetProperties` | List service locations |
-| `match_property` | `handleMatchProperty` | Select a property from the list |
-| `prepare_job` | `handlePrepareJob` | Blocked-status check + job creation |
-| `add_task_to_job` | `handleAddTaskToJob` | Append task line items to a job |
-| `save_caller_number` | `handleSaveCallerNumber` | Persist a new phone number |
-| `add_representative` | `handleAddRepresentative` | Create a new contact on the account |
-| `transfer_call` | `handleTransferCall` | Route call to department/on-call tech |
+| Function | Endpoint | Handler | Purpose |
+|---|---|---|---|
+| `lookup_customer_fuzzy` | `POST /api/buildops/fn/lookup_customer_fuzzy` | `handleLookupFuzzy` | Name/address/zip fuzzy search |
+| `confirm_customer` | `POST /api/buildops/fn/confirm_customer` | `handleConfirmCustomer` | Confirm which candidate from multiple matches |
+| `match_property` | `POST /api/buildops/fn/match_property` | `handleMatchProperty` | Fuzzy-match spoken address to a property |
+| `prepare_job` | `POST /api/buildops/fn/prepare_job` | `handlePrepareJob` | Validate account + create job during call |
+| `add_representative` | `POST /api/buildops/fn/add_representative` | `handleAddRepresentative` | Create new named contact on the account |
 
 ### Expected Supabase tables
 
@@ -82,7 +84,7 @@ See [docs/buildops/sync.md](docs/buildops/sync.md) for full details.
 ### Env
 
 - `BUILDOPS_API_URL=https://public-api.live.buildops.com`
-- `RETELL_LLM_ID=...` (Retell agent/LLM ID to override on inbound)
+- `LLM_ID=...` (Retell agent/LLM ID to override on inbound)
 
 ### Documentation
 
