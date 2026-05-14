@@ -2,4 +2,4 @@
 dist/
 node_modules/
 package-lock.json
-tests/buildops/output/customers.csv
+tests/buildops/output/*
