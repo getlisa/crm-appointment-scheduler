@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import { env } from './config/env.js';
 import { serviceTitanRouter } from './routes/servicetitan.js';
+import buildopsRouter from './routes/buildops.js';
+import retellRouter from './services/buildops/retell/index.js';
 
 const app = express();
 app.use(
@@ -20,6 +22,8 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api/servicetitan', serviceTitanRouter);
+app.use('/api/buildops', buildopsRouter);
+app.use('/api/buildops/retell', retellRouter);
 
 app.listen(env.port, () => {
   console.log(`[crm-appointment-scheduler] listening on ${env.port}`);

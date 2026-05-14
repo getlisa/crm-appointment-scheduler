@@ -1,0 +1,124 @@
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+
+const CLIENT_ID     = process.env.CLIENT_ID!;
+const CLIENT_SECRET = process.env.CLIENT_SECRET!;
+const TENANT_ID     = process.env.TENANT_ID!;
+const BASE_URL      = 'https://public-api.live.buildops.com/v1';
+
+// Usage: npx tsx get_representatives.ts <inboundPhoneNumber>
+const INBOUND_PHONE = process.argv[2];
+if (!INBOUND_PHONE) {
+  console.error('Usage: npx tsx get_representatives.ts <inboundPhoneNumber>');
+  process.exit(1);
+}
+
+async function getAccessToken(): Promise<string> {
+  const res = await fetch(`${BASE_URL}/auth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, tenantId: TENANT_ID }),
+  });
+  if (!res.ok) throw new Error(`Auth failed: ${res.status}`);
+  return (await res.json()).access_token;
+}
+
+function parseCSVLine(line: string): string[] {
+  const cols: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQuotes = !inQuotes;
+    } else if (ch === ',' && !inQuotes) {
+      cols.push(cur); cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  cols.push(cur);
+  return cols;
+}
+
+function lookupCustomerByPhone(phone: string): { id: string; name: string } {
+  const csvPath = path.resolve(__dirname, '../output/customers.csv');
+  const lines = fs.readFileSync(csvPath, 'utf-8').trim().split('\n');
+  const headers = lines[0].split(',');
+  const idIdx   = headers.indexOf('id');
+  const nameIdx = headers.indexOf('name');
+  const allNumIdx = headers.indexOf('all_numbers');
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCSVLine(lines[i]);
+    const allNums: string[] = JSON.parse(cols[allNumIdx] || '[]');
+    const digits = phone.replace(/\D/g, '').slice(-10);
+    if (allNums.includes(digits)) {
+      return { id: cols[idIdx], name: cols[nameIdx] };
+    }
+  }
+  throw new Error(`No customer found with phone "${phone}" in customers.csv`);
+}
+
+interface Rep {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  cellPhone: string | null;
+  landlinePhone: string | null;
+  email: string | null;
+  propertyId: string | null;
+  isActive: boolean;
+  isDoNotCall: boolean;
+  version: number;
+}
+
+async function getRepresentatives(token: string, customerId: string): Promise<Rep[]> {
+  const results: Rep[] = [];
+  let page = 0;
+
+  while (true) {
+    const res = await fetch(`${BASE_URL}/customers/${customerId}/our-representatives?page=${page}&page_size=100`, {
+      headers: { Authorization: `Bearer ${token}`, tenantId: TENANT_ID, Accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error(`GET our-representatives failed (${res.status}): ${await res.text()}`);
+    const data = await res.json() as { items?: Rep[] };
+    const items = data.items ?? [];
+    results.push(...items);
+    if (items.length < 100) break;
+    page++;
+  }
+
+  return results;
+}
+
+async function main() {
+  const token = await getAccessToken();
+  console.log('Token acquired.');
+
+  const customer = lookupCustomerByPhone(INBOUND_PHONE);
+  console.log(`Customer: "${customer.name}" (id: ${customer.id})\n`);
+
+  const reps = await getRepresentatives(token, customer.id);
+  console.log(`Representatives: ${reps.length}`);
+
+  if (reps.length === 0) {
+    console.log('  No representatives found.');
+    return;
+  }
+
+  reps.forEach((r, i) => {
+    const name = [r.firstName, r.lastName].filter(Boolean).join(' ') || '(no name)';
+    const phones = [r.cellPhone && `cell: ${r.cellPhone}`, r.landlinePhone && `landline: ${r.landlinePhone}`]
+      .filter(Boolean).join(', ') || 'no phones';
+    console.log(`  [${i + 1}] ${name} | ${phones} | email: ${r.email ?? '-'} | active: ${r.isActive} | dnc: ${r.isDoNotCall} | v${r.version}`);
+  });
+}
+
+main().catch(console.error);
