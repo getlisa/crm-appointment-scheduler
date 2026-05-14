@@ -1,3 +1,10 @@
+/**
+ * Supabase queries for the buildops_representatives table.
+ * Representatives are customer contacts whose phone numbers feed into the customer's
+ * all_numbers array during sync. New reps can be created mid-call when a new number
+ * is detected and the caller provides their name.
+ */
+
 import { supabaseAdmin as supabase } from '../../../lib/supabase.js';
 import type { RepresentativeRow } from '../types.js';
 
@@ -24,7 +31,13 @@ function mapRow(row: Record<string, unknown>): RepresentativeRow {
   };
 }
 
-// Primary lookup: inbound phone → representative (covers both cell and landline)
+/**
+ * Finds active representatives whose normalized cell or landline phone matches.
+ *
+ * @param tenantId    - BuildOps tenant UUID
+ * @param phoneLast10 - Normalized 10-digit phone
+ * @returns Matching representatives (may belong to different customers)
+ */
 export async function findRepsByPhone(
   tenantId: string,
   phoneLast10: string,
@@ -42,6 +55,13 @@ export async function findRepsByPhone(
   return (data as Record<string, unknown>[]).map(mapRow);
 }
 
+/**
+ * Returns all active representatives for a customer.
+ *
+ * @param tenantId   - BuildOps tenant UUID
+ * @param customerId - Our buildops_customers.id (UUID)
+ * @returns Array of RepresentativeRow
+ */
 export async function getRepsByCustomer(
   tenantId: string,
   customerId: string,
@@ -57,6 +77,13 @@ export async function getRepsByCustomer(
   return (data as Record<string, unknown>[]).map(mapRow);
 }
 
+/**
+ * Returns all active representatives associated with a specific property.
+ *
+ * @param tenantId   - BuildOps tenant UUID
+ * @param propertyId - BuildOps property UUID
+ * @returns Array of RepresentativeRow
+ */
 export async function getRepsByProperty(
   tenantId: string,
   propertyId: string,
@@ -114,6 +141,16 @@ async function resolveUniqueName(
   return { firstName: firstName.trim(), lastName: `${baseLast}${n}` };
 }
 
+/**
+ * Inserts a new representative row into buildops_representatives.
+ * If a rep with the same first+last name already exists for this customer, the
+ * last name is auto-suffixed with an incrementing number to keep source tags unique
+ * (e.g. "Smith" → "Smith2" → "Smith3").
+ *
+ * @param input - New rep data including tenantId, customerId, name, and at least one phone
+ * @returns The inserted RepresentativeRow, or null if the insert failed
+ * @throws If neither cellPhone nor landlinePhone is provided
+ */
 export async function createRepresentative(
   input: CreateRepInput,
 ): Promise<RepresentativeRow | null> {

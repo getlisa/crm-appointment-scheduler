@@ -1,6 +1,14 @@
 // @ts-nocheck — Deno runtime file; npm: imports won't resolve in Node TS.
-// Supabase Edge Function — BuildOps sync (single-file, paste into browser editor)
-// Auto-injected: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+/**
+ * Supabase Edge Function — BuildOps data sync (deployed as buildops_cron).
+ * Triggered by pg_cron on a schedule. For each configured tenant it runs:
+ *   1. fullSeed()         — on first run (buildops_customers empty): fetches all customers,
+ *                           properties, and representatives, upserts to Supabase.
+ *   2. incrementalSync()  — on subsequent runs: dirty-detection via rep/property/timestamp
+ *                           changes, only rebuilds changed customers. Early-stop optimization.
+ *   3. jobsSync()         — every run: watermark-based incremental fetch of updated jobs.
+ * Auto-injected Supabase env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+ */
 
 import { createClient, SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
@@ -17,7 +25,7 @@ function makeSupabase(): SupabaseClient {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface PhoneEntry { phone: string; source: string }
-interface AuditInfo { createdDate?: string | null; createdDateTime?: number | null; lastUpdatedDate?: string | null; lastUpdatedDateTime?: number | null }
+interface AuditInfo { createdDate?: string | null; createdDateTime?: number | null; lastUpdatedDate?: string | null; lastUpdatedDateTime?: number | null; deletedDateTime?: number | null }
 
 interface ApiAddress {
   id?: string; addressType?: string | null;
@@ -60,6 +68,25 @@ interface ApiRep {
   version?: number | null;
   propertyId?: string | null; companyId?: string | null;
   audit?: AuditInfo | null;
+}
+
+interface ApiJob {
+  id: string;
+  jobNumber?: string | null;
+  status?: string | null;
+  customerPropertyId?: string | null;
+  customerId?: string | null;
+  jobTypeId?: string | null;
+  priceBookId?: string | null;
+  isUseTaxable?: boolean | null;
+  issueDescription?: string | null;
+  customerProvidedJobNumber?: string | null;
+  customerProvidedPoNumber?: string | null;
+  billingCustomer?: { id?: string | null; name?: string | null } | null;
+  invoiceStatus?: string | null;
+  serviceAgreementId?: string | null;
+  completedDate?: number | null;
+  audit?: { createdDateTime?: number | null; lastUpdatedDateTime?: number | null; deletedDateTime?: number | null } | null;
 }
 
 interface TenantRow {
@@ -107,11 +134,20 @@ function apiHeaders(token: string, tenantId: string) {
   return { Authorization: `Bearer ${token}`, tenantId, Accept: 'application/json' };
 }
 
+async function fetchWithRetry(url: string, options: RequestInit, retries = 3, delayMs = 1500): Promise<Response> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(url, options);
+    if (res.ok || res.status < 500) return res;  // success or 4xx (don't retry client errors)
+    if (attempt < retries) await new Promise(r => setTimeout(r, delayMs * (attempt + 1)));
+  }
+  return fetch(url, options); // final attempt, let caller handle the error
+}
+
 async function fetchAllCustomers(token: string, tenantId: string): Promise<ApiCustomer[]> {
   const all: ApiCustomer[] = [];
   let page = 1; // customers API is 1-based; page=0 returns the same items as page=1
   while (true) {
-    const res = await fetch(`${BASE_URL}/customers?limit=${PAGE_SIZE}&page=${page}&include_inactive=true`, { headers: apiHeaders(token, tenantId) });
+    const res = await fetchWithRetry(`${BASE_URL}/customers?limit=${PAGE_SIZE}&page=${page}&include_inactive=true`, { headers: apiHeaders(token, tenantId) });
     if (!res.ok) throw new Error(`Customers page ${page}: ${res.status}`);
     const items = ((await res.json()) as { items?: ApiCustomer[] }).items ?? [];
     if (items.length === 0) break;
@@ -134,7 +170,7 @@ async function fetchAllProperties(token: string, tenantId: string): Promise<{
   let page = 0, total = Infinity;
 
   while (properties.length < total) {
-    const res = await fetch(`${BASE_URL}/properties?include_addresses=true&page=${page}&page_size=${PAGE_SIZE}`, { headers: apiHeaders(token, tenantId) });
+    const res = await fetchWithRetry(`${BASE_URL}/properties?include_addresses=true&page=${page}&page_size=${PAGE_SIZE}`, { headers: apiHeaders(token, tenantId) });
     if (!res.ok) throw new Error(`Properties page ${page}: ${res.status}`);
     const data = await res.json() as { totalCount?: number; items?: ApiProperty[] };
     if (page === 0) total = data.totalCount ?? 0;
@@ -165,7 +201,7 @@ async function fetchReps(token: string, tenantId: string, customerId: string): P
   const all: ApiRep[] = [];
   let page = 0;
   while (true) {
-    const res = await fetch(`${BASE_URL}/customers/${customerId}/our-representatives?page=${page}&page_size=${PAGE_SIZE}`, { headers: apiHeaders(token, tenantId) });
+    const res = await fetchWithRetry(`${BASE_URL}/customers/${customerId}/our-representatives?page=${page}&page_size=${PAGE_SIZE}`, { headers: apiHeaders(token, tenantId) });
     if (!res.ok) break;
     const items = ((await res.json()) as { items?: ApiRep[] }).items ?? [];
     all.push(...items);
@@ -175,7 +211,31 @@ async function fetchReps(token: string, tenantId: string, customerId: string): P
   return all;
 }
 
+async function fetchJobsSince(token: string, tenantId: string, since: number): Promise<ApiJob[]> {
+  const all: ApiJob[] = [];
+  let page = 0;
+  while (true) {
+    const qs = new URLSearchParams({
+      page: String(page),
+      page_size: String(PAGE_SIZE),
+      ...(since > 0 ? { lastUpdatedDateStart: new Date(since).toISOString() } : {}),
+    });
+    const res = await fetchWithRetry(`${BASE_URL}/jobs?${qs}`, { headers: apiHeaders(token, tenantId) });
+    if (!res.ok) throw new Error(`Jobs page ${page}: ${res.status}`);
+    const items = ((await res.json()) as { items?: ApiJob[] }).items ?? [];
+    all.push(...items);
+    if (items.length < PAGE_SIZE) break;
+    page++;
+  }
+  return all;
+}
+
 // ─── Row builders ─────────────────────────────────────────────────────────────
+
+function formatAddress(a: ApiAddress | undefined): string | null {
+  if (!a) return null;
+  return [a.addressLine1, a.addressLine2, a.city, a.state, a.zipcode].filter(Boolean).join(', ') || null;
+}
 
 function buildCustomerRow(c: ApiCustomer, reps: ApiRep[], propMap: Map<string, ApiProperty[]>, propPhoneMap: Map<string, PhoneEntry[]>, tenantId: string): Record<string, unknown> {
   const entries: PhoneEntry[] = [];
@@ -192,18 +252,6 @@ function buildCustomerRow(c: ApiCustomer, reps: ApiRep[], propMap: Map<string, A
   const allNumbers: string[] = [], allSources: string[] = [];
   for (const e of entries) { if (!seen.has(e.phone)) { seen.add(e.phone); allNumbers.push(e.phone); allSources.push(e.source); } }
 
-  const propsSummary = (propMap.get(c.id) ?? []).map(p => ({
-    id: p.id, companyName: p.companyName ?? null, phonePrimary: p.phonePrimary ?? null,
-    priceBookId: p.priceBookId ?? null, isTaxable: p.isTaxable ?? false, version: p.version ?? 0,
-    addresses: addressList(p.addresses).map(a => ({ addressLine1: a.addressLine1 ?? null, addressLine2: a.addressLine2 ?? null, city: a.city ?? null, state: a.state ?? null, zipcode: a.zipcode ?? null, addressType: a.addressType ?? null })),
-  }));
-  const repsSummary = reps.map(r => ({
-    id: r.id, firstName: r.firstName ?? null, lastName: r.lastName ?? null,
-    cellPhone: r.cellPhone ?? null, landlinePhone: r.landlinePhone ?? null,
-    email: r.email ?? null, propertyId: r.propertyId ?? r.companyId ?? null,
-    isActive: r.isActive ?? true, isDoNotCall: r.isDoNotCall ?? false, version: r.version ?? 0,
-  }));
-
   const repMaxTs = reps.reduce((max, r) => {
     const t = r.audit?.lastUpdatedDate ? new Date(r.audit.lastUpdatedDate).getTime() : 0;
     return Math.max(max, isNaN(t) ? 0 : t);
@@ -211,6 +259,10 @@ function buildCustomerRow(c: ApiCustomer, reps: ApiRep[], propMap: Map<string, A
   const propMaxTs = (propMap.get(c.id) ?? []).reduce((max, p) =>
     Math.max(max, p.audit?.lastUpdatedDateTime ?? 0), 0);
   const effectiveTs = Math.max(c.audit?.lastUpdatedDateTime ?? 0, repMaxTs, propMaxTs) || null;
+
+  const addrItems = addressList(c.addresses);
+  const billingAddr = formatAddress(addrItems.find(a => a.addressType === 'billingAddress'));
+  const businessAddr = formatAddress(addrItems.find(a => a.addressType !== 'billingAddress') ?? addrItems[0]);
 
   return {
     buildops_customer_id: c.id, tenant_id: tenantId, name: c.name,
@@ -222,7 +274,9 @@ function buildCustomerRow(c: ApiCustomer, reps: ApiRep[], propMap: Map<string, A
     buildops_last_updated_at: effectiveTs,
     buildops_created_at: c.audit?.createdDateTime ?? null,
     all_numbers: allNumbers, all_numbers_sources: allSources,
-    representatives: repsSummary, properties: propsSummary,
+    property_ids: (propMap.get(c.id) ?? []).map(p => p.id),
+    billing_address: billingAddr,
+    business_address: businessAddr,
   };
 }
 
@@ -291,11 +345,14 @@ Deno.serve(async (_req: Request) => {
         .from('buildops_customers').select('*', { count: 'exact', head: true }).eq('tenant_id', tenantId);
       if (countErr) throw new Error(`count check for ${tenantId}: ${countErr.message}`);
 
-      const tenantResult = (count ?? 0) === 0
-        ? await fullSeed(supabase, token, tenantId)
-        : await incrementalSync(supabase, token, tenantId);
+      const [tenantResult, jobsResult] = await Promise.all([
+        (count ?? 0) === 0
+          ? fullSeed(supabase, token, tenantId)
+          : incrementalSync(supabase, token, tenantId),
+        jobsSync(supabase, token, tenantId),
+      ]);
 
-      results.push({ tenant: inboundPhone, ...tenantResult });
+      results.push({ tenant: inboundPhone, ...tenantResult, jobs: jobsResult });
     }
 
     return new Response(
@@ -314,7 +371,7 @@ async function fetchRepsForAll(
   token: string,
   tenantId: string,
   customerIds: string[],
-  concurrency = 15,
+  concurrency = 40,
 ): Promise<Map<string, ApiRep[]>> {
   const result = new Map<string, ApiRep[]>();
   for (let i = 0; i < customerIds.length; i += concurrency) {
@@ -328,11 +385,12 @@ async function fetchRepsForAll(
 // ─── Full seed ────────────────────────────────────────────────────────────────
 
 async function fullSeed(supabase: SupabaseClient, token: string, tenantId: string): Promise<Record<string, unknown>> {
-  const { properties, propMap, propPhoneMap } = await fetchAllProperties(token, tenantId);
-  const propertyRows = properties.filter(p => p.customerId).map(buildPropertyRow);
-  await batchUpsert(supabase, 'buildops_properties', propertyRows, 'id');
-
-  const customers = await fetchAllCustomers(token, tenantId);
+  // Fetch properties and customers in parallel — fully independent API calls.
+  // Properties are upserted AFTER customers to satisfy the FK constraint.
+  const [{ properties, propMap, propPhoneMap }, customers] = await Promise.all([
+    fetchAllProperties(token, tenantId),
+    fetchAllCustomers(token, tenantId),
+  ]);
 
   // Fetch all reps in parallel batches (15 concurrent) instead of sequentially
   const repsMap = await fetchRepsForAll(token, tenantId, customers.map(c => c.id));
@@ -347,15 +405,21 @@ async function fullSeed(supabase: SupabaseClient, token: string, tenantId: strin
   }
 
   const dedupedCustomerRows = [...new Map(customerRows.map(r => [(r as any).buildops_customer_id, r])).values()];
-  const dedupedRepRows = [...new Map(repRows.map(r => [`${(r as any).customer_id}:${(r as any).id}`, r])).values()];
 
+  // Customers first — properties and reps have FK references to buildops_customers
   await batchUpsert(supabase, 'buildops_customers', dedupedCustomerRows, 'tenant_id,buildops_customer_id');
 
+  const propertyRows = properties.filter(p => p.customerId).map(buildPropertyRow);
+  if (propertyRows.length > 0) await batchUpsert(supabase, 'buildops_properties', propertyRows, 'id');
+
+  // No dedup needed — we clear all reps before re-inserting, so no conflicts possible
   const { error: delErr } = await supabase.from('buildops_representatives').delete().eq('tenant_id', tenantId);
   if (delErr) throw new Error(`clear reps: ${delErr.message}`);
-  if (dedupedRepRows.length > 0) await batchInsert(supabase, 'buildops_representatives', dedupedRepRows);
+  if (repRows.length > 0) await batchInsert(supabase, 'buildops_representatives', repRows);
 
-  return { mode: 'full', properties: propertyRows.length, customers: dedupedCustomerRows.length, representatives: dedupedRepRows.length };
+  await updateRepresentativeIds(supabase, tenantId, customers.map(c => c.id));
+
+  return { mode: 'full', properties: propertyRows.length, customers: dedupedCustomerRows.length, representatives: repRows.length };
 }
 
 // ─── Incremental sync ─────────────────────────────────────────────────────────
@@ -404,7 +468,7 @@ async function incrementalSync(supabase: SupabaseClient, token: string, tenantId
   let page = 1; // 1-based
 
   while (true) {
-    const res = await fetch(
+    const res = await fetchWithRetry(
       `${BASE_URL}/customers?limit=100&page=${page}&include_inactive=true`,
       { headers: apiHeaders(token, tenantId) },
     );
@@ -445,19 +509,117 @@ async function incrementalSync(supabase: SupabaseClient, token: string, tenantId
   const relevantRepRows = repRows.filter(r => rebuiltCustomerIds.has((r as { customer_id: string }).customer_id));
   if (relevantRepRows.length > 0) await batchInsert(supabase, 'buildops_representatives', relevantRepRows);
 
+  if (rebuiltCustomerIds.size > 0) await updateRepresentativeIds(supabase, tenantId, [...rebuiltCustomerIds]);
+
   // Upsert all properties and delete any that no longer exist in the API (Fix 6)
   const allPropertyRows = properties.filter(p => p.customerId).map(buildPropertyRow);
   if (allPropertyRows.length > 0) await batchUpsert(supabase, 'buildops_properties', allPropertyRows, 'id');
   const apiPropIds = properties.map(p => p.id);
   const tenantCustomerIds = [...new Set(properties.map(p => p.customerId).filter(Boolean))] as string[];
-  if (tenantCustomerIds.length > 0 && apiPropIds.length > 0) {
-    const { error: propDelErr } = await supabase
-      .from('buildops_properties')
-      .delete()
-      .in('customer_id', tenantCustomerIds)
-      .not('id', 'in', `(${apiPropIds.map(id => `'${id}'`).join(',')})`);
-    if (propDelErr) console.warn(`property cleanup: ${propDelErr.message}`);
+  if (tenantCustomerIds.length > 0) {
+    const CHUNK = 50;
+    const existingPropIds: string[] = [];
+    let fetchFailed = false;
+    for (let i = 0; i < tenantCustomerIds.length; i += CHUNK) {
+      const { data, error } = await supabase
+        .from('buildops_properties')
+        .select('id')
+        .in('customer_id', tenantCustomerIds.slice(i, i + CHUNK));
+      if (error) { console.warn(`property cleanup fetch: ${error.message}`); fetchFailed = true; break; }
+      existingPropIds.push(...(data ?? []).map((p: { id: string }) => p.id));
+    }
+    if (!fetchFailed) {
+      const apiPropIdSet = new Set(apiPropIds);
+      const toDelete = existingPropIds.filter(id => !apiPropIdSet.has(id));
+      if (toDelete.length > 0) {
+        const { error: propDelErr } = await supabase.from('buildops_properties').delete().in('id', toDelete);
+        if (propDelErr) console.warn(`property cleanup: ${propDelErr.message}`);
+      }
+    }
   }
 
   return { mode: 'incremental', rebuilt, skipped, properties_synced: allPropertyRows.length, representatives_replaced: relevantRepRows.length };
+}
+
+// ─── Representative IDs sync helper ──────────────────────────────────────────
+
+async function updateRepresentativeIds(
+  supabase: SupabaseClient,
+  tenantId: string,
+  customerIds: string[],
+): Promise<void> {
+  if (customerIds.length === 0) return;
+
+  const { data: rows, error } = await supabase
+    .from('buildops_representatives')
+    .select('id, customer_id')
+    .eq('tenant_id', tenantId)
+    .in('customer_id', customerIds);
+  if (error) throw new Error(`rep IDs query: ${error.message}`);
+
+  const byCustomer = new Map<string, string[]>();
+  for (const r of (rows ?? []) as { id: string; customer_id: string }[]) {
+    const list = byCustomer.get(r.customer_id) ?? [];
+    list.push(r.id);
+    byCustomer.set(r.customer_id, list);
+  }
+
+  const PARALLEL = 50;
+  for (let i = 0; i < customerIds.length; i += PARALLEL) {
+    const results = await Promise.all(
+      customerIds.slice(i, i + PARALLEL).map(customerId =>
+        supabase
+          .from('buildops_customers')
+          .update({ representative_ids: byCustomer.get(customerId) ?? [] })
+          .eq('tenant_id', tenantId)
+          .eq('buildops_customer_id', customerId),
+      ),
+    );
+    const failed = results.find(r => r.error);
+    if (failed?.error) throw new Error(`update rep IDs: ${failed.error.message}`);
+  }
+}
+
+// ─── Jobs incremental sync ────────────────────────────────────────────────────
+
+async function jobsSync(supabase: SupabaseClient, token: string, tenantId: string): Promise<Record<string, unknown>> {
+  const { data: wmRow } = await supabase
+    .from('buildops_jobs')
+    .select('last_updated_at')
+    .eq('tenant_id', tenantId)
+    .order('last_updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const watermark = (wmRow as { last_updated_at: number | null } | null)?.last_updated_at ?? 0;
+
+  const jobs = await fetchJobsSince(token, tenantId, watermark);
+  if (jobs.length === 0) return { mode: 'jobs_incremental', synced: 0, watermark };
+
+  const rows = jobs.map(j => ({
+    tenant_id: tenantId,
+    job_id: j.id,
+    job_number: j.jobNumber ?? null,
+    status: j.status ?? null,
+    customer_property_id: j.customerPropertyId ?? null,
+    customer_id: j.customerId ?? null,
+    job_type_id: j.jobTypeId ?? null,
+    price_book_id: j.priceBookId ?? null,
+    is_use_taxable: j.isUseTaxable ?? false,
+    issue_description: j.issueDescription ?? null,
+    customer_provided_job_number: j.customerProvidedJobNumber ?? null,
+    customer_provided_po_number: j.customerProvidedPoNumber ?? null,
+    billing_customer_id: j.billingCustomer?.id ?? null,
+    billing_customer_name: j.billingCustomer?.name ?? null,
+    invoice_status: j.invoiceStatus ?? null,
+    service_agreement_id: j.serviceAgreementId ?? null,
+    completed_date: j.completedDate ?? null,
+    created_at: j.audit?.createdDateTime ?? null,
+    last_updated_at: j.audit?.lastUpdatedDateTime ?? null,
+    is_deleted: j.audit?.deletedDateTime != null,
+  }));
+
+  await batchUpsert(supabase, 'buildops_jobs', rows, 'tenant_id,job_id');
+
+  const newMax = rows.reduce((max, r) => Math.max(max, (r.last_updated_at as number) ?? 0), watermark);
+  return { mode: 'jobs_incremental', synced: jobs.length, watermark: newMax };
 }

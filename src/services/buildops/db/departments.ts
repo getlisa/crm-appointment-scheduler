@@ -1,3 +1,10 @@
+/**
+ * Supabase queries for the buildops_departments table.
+ * Departments are not queried during live calls — the job department is set via
+ * the hardcoded DEFAULT_DEPARTMENT_ID constant in handlers/job.ts.
+ * This module is available for admin tooling and config verification.
+ */
+
 import { supabaseAdmin as supabase } from '../../../lib/supabase.js';
 import type { DepartmentRow } from '../types.js';
 
@@ -12,6 +19,12 @@ function mapRow(row: Record<string, unknown>): DepartmentRow {
   };
 }
 
+/**
+ * Returns all active departments for a tenant, ordered by tag_name.
+ *
+ * @param tenantId - BuildOps tenant UUID
+ * @returns Array of DepartmentRow (empty if none found)
+ */
 export async function getDepartments(tenantId: string): Promise<DepartmentRow[]> {
   const { data, error } = await supabase
     .from('departments')

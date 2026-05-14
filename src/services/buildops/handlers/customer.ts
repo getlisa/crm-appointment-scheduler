@@ -1,3 +1,10 @@
+/**
+ * Retell function handlers for customer confirmation and property resolution.
+ * confirm_customer: finalises which account the caller belongs to after multiple matches.
+ * get_properties_for_customer: lists all service locations so the agent can present them.
+ * match_property: fuzzy-matches a spoken address to a BuildOps property UUID.
+ */
+
 import { getCustomerById } from '../db/customers.js';
 import { getPropertiesForCustomer } from '../db/properties.js';
 import { setMatchedCustomer, setCallStatus } from '../db/inbound-calls.js';
@@ -5,6 +12,14 @@ import { setMatchedCustomer, setCallStatus } from '../db/inbound-calls.js';
 import { tokenSetRatio, normalizeAddress } from '../fuzzy-search.js';
 import type { InboundCallRow, PropertyRow, RetellFunctionResult } from '../types.js';
 
+/**
+ * Confirms the customer selected by the caller from a multiple_matches list.
+ * Writes matchedCustomerId to the call session and returns customer data + property count.
+ *
+ * @param session - Current call session
+ * @param args    - Must include candidate_id (our buildops_customers.id UUID)
+ * @returns RetellFunctionResult — status: confirmed, with customer info and property_count
+ */
 export async function handleConfirmCustomer(
   session: InboundCallRow,
   args: Record<string, unknown>,
@@ -35,6 +50,13 @@ export async function handleConfirmCustomer(
   };
 }
 
+/**
+ * Returns all service location properties for the confirmed customer.
+ * Used when the agent needs to present a list of addresses to the caller.
+ *
+ * @param session - Current call session (matchedCustomerId must be set)
+ * @returns RetellFunctionResult — status: ok with properties array, or no_properties
+ */
 export async function handleGetProperties(
   session: InboundCallRow,
 ): Promise<RetellFunctionResult> {
@@ -80,6 +102,15 @@ function scoreProperty(spoken: string, prop: PropertyRow): number {
   return Math.min(line1Score + cityBonus + zipBonus, 1);
 }
 
+/**
+ * Fuzzy-matches a spoken address against the confirmed customer's properties.
+ * Scores using token-set ratio on normalized address line 1, with bonuses for
+ * matching city and zip. Returns the property UUID needed for prepare_job.
+ *
+ * @param session - Current call session (matchedCustomerId must be set)
+ * @param args    - Must include spoken_address (caller's spoken service location)
+ * @returns RetellFunctionResult — status: matched (with property_id) | ambiguous | not_found
+ */
 export async function handleMatchProperty(
   session: InboundCallRow,
   args: Record<string, unknown>,

@@ -1,3 +1,12 @@
+/**
+ * Customer identification algorithms for the BuildOps integration.
+ * Implements Jaro-Winkler string similarity, Soundex phonetic encoding,
+ * USPS address normalization, and token-set ratio (Jaccard) matching.
+ * Exports scoreCandidates() for weighted multi-field scoring, applyThreshold()
+ * for accept/disambiguate/handoff band assignment, and computeMatchSignals() +
+ * assignTier() + crossValidate() for confidence tier determination.
+ */
+
 import type { CustomerRow, FuzzyQuery, ScoredCandidate, LookupDecision } from './types.js';
 
 // ── Jaro-Winkler ──────────────────────────────────────────────────────────────

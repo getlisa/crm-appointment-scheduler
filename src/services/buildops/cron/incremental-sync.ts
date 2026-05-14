@@ -1,3 +1,15 @@
+/**
+ * BuildOps incremental sync script.
+ * Detects "dirty" customers via three independent strategies: rep changes queried from
+ * Supabase, property timestamp changes from the BuildOps API, and customer version/
+ * timestamp advances. Only dirty customers are rebuilt (fresh reps fetched); clean
+ * customers are reused from the existing customers.csv. An early-stop optimization
+ * halts pagination once all remaining API pages are below the sync watermark.
+ *
+ * Requires an existing customers.csv from full-sync.ts in the output directory.
+ * Required env vars: CLIENT_ID, CLIENT_SECRET, TENANT_ID, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+ */
+
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';

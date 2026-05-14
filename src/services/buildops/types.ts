@@ -40,6 +40,10 @@ export interface CustomerRow {
   normalizedPhoneSecondary: string | null;
   priceBookId: string | null;
   allNumbers: string[];
+  propertyIds: string[];
+  representativeIds: string[];
+  billingAddress: string | null;
+  businessAddress: string | null;
 }
 
 export interface RepresentativeRow {
@@ -85,11 +89,9 @@ export interface InboundCallRow {
   retellCallId: string;
   tenantId: string;
   caller: string | null;
-  receiver: string;
   matchedCustomerId: string | null;
   status: InboundCallStatus;
   buildopsJobId: string | null;
-  pendingJobs: PendingJobData[];
 }
 
 export interface PricebookRow {
@@ -125,6 +127,17 @@ export interface JobRow {
   dueDate: string | null;
   isFlagged: boolean;
   tenantId: string;
+  createdAt: number | null;
+  lastUpdatedAt: number | null;
+  issueDescription: string | null;
+  customerProvidedJobNumber: string | null;
+  customerProvidedPoNumber: string | null;
+  billingCustomerId: string | null;
+  billingCustomerName: string | null;
+  invoiceStatus: string | null;
+  serviceAgreementId: string | null;
+  completedDate: number | null;
+  isDeleted: boolean;
   audit: Record<string, unknown> | null;
 }
 
@@ -162,7 +175,7 @@ export type LookupDecision =
 
 // ── Job creation ──────────────────────────────────────────────────────────────
 
-export type JobStatus = 'Open' | 'In Progress' | 'On Hold' | 'Cancelled';
+export type JobStatus = 'Open' | 'In Progress' | 'On Hold' | 'Canceled' | 'Complete';
 
 export interface PendingTaskData {
   name: string;
@@ -203,13 +216,37 @@ export interface BuildOpsJobResponse {
   status: string;
   customerId: string;
   customerPropertyId: string;
+  customerName?: string | null;
   jobTypeId: string;
+  jobTypeName?: string | null;
   priceBookId: string;
+  priority?: string | null;
   version: number;
   isUseTaxable: boolean;
   tenantId: string;
   departments: { id: string; name: string }[];
-  audit: { createdDate: string; lastUpdatedDate: string };
+  billingStatus?: string | null;
+  reviewStatus?: string | null;
+  billingType?: string | null;
+  amountQuoted?: number | null;
+  isFlagged?: boolean;
+  dueDate?: string | null;
+  issueDescription?: string | null;
+  customerProvidedJobNumber?: string | null;
+  customerProvidedPONumber?: string | null;
+  billingCustomerId?: string | null;
+  billingCustomerName?: string | null;
+  invoiceStatus?: string | null;
+  serviceAgreementId?: string | null;
+  completedDate?: number | null;
+  audit: {
+    createdDate?: string | null;
+    createdDateTime?: number | null;
+    lastUpdatedDate?: string | null;
+    lastUpdatedDateTime?: number | null;
+    deletedDate?: string | null;
+    deletedDateTime?: number | null;
+  };
 }
 
 // ── Retell webhook payloads ───────────────────────────────────────────────────

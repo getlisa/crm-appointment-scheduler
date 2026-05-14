@@ -1,3 +1,9 @@
+/**
+ * Supabase queries for the buildops_jobs table.
+ * Jobs are written immediately during the call (via prepare_job) and kept
+ * in sync with BuildOps via the incremental jobs sync watermark strategy.
+ */
+
 import { supabaseAdmin as supabase } from '../../../lib/supabase.js';
 import type { JobRow } from '../types.js';
 
@@ -24,14 +30,33 @@ function mapRow(row: Record<string, unknown>): JobRow {
     dueDate: row.due_date as string | null,
     isFlagged: row.is_flagged as boolean,
     tenantId: row.tenant_id as string,
+    createdAt: row.created_at as number | null,
+    lastUpdatedAt: row.last_updated_at as number | null,
+    issueDescription: row.issue_description as string | null,
+    customerProvidedJobNumber: row.customer_provided_job_number as string | null,
+    customerProvidedPoNumber: row.customer_provided_po_number as string | null,
+    billingCustomerId: row.billing_customer_id as string | null,
+    billingCustomerName: row.billing_customer_name as string | null,
+    invoiceStatus: row.invoice_status as string | null,
+    serviceAgreementId: row.service_agreement_id as string | null,
+    completedDate: row.completed_date as number | null,
+    isDeleted: (row.is_deleted as boolean) ?? false,
     audit: row.audit as Record<string, unknown> | null,
   };
 }
 
+/**
+ * Upserts a job row into buildops_jobs.
+ * On conflict (tenant_id, job_id) all fields are overwritten — used both for
+ * the initial write during prepare_job and for cron sync updates.
+ *
+ * @param tenantId - BuildOps tenant UUID
+ * @param jobData  - Job fields to write; all fields except jobId are optional
+ */
 export async function upsertJob(tenantId: string, jobData: {
   jobId: string;
-  jobNumber: string;
-  status: string;
+  jobNumber?: string;
+  status?: string;
   customerPropertyId?: string;
   customerName?: string;
   customerId?: string;
@@ -48,13 +73,24 @@ export async function upsertJob(tenantId: string, jobData: {
   departments?: { id: string; name: string }[];
   dueDate?: string;
   isFlagged?: boolean;
+  createdAt?: number;
+  lastUpdatedAt?: number;
+  issueDescription?: string;
+  customerProvidedJobNumber?: string;
+  customerProvidedPoNumber?: string;
+  billingCustomerId?: string;
+  billingCustomerName?: string;
+  invoiceStatus?: string;
+  serviceAgreementId?: string;
+  completedDate?: number;
+  isDeleted?: boolean;
   audit?: Record<string, unknown>;
 }): Promise<void> {
-  await supabase.from('jobs').upsert({
+  await supabase.from('buildops_jobs').upsert({
     tenant_id: tenantId,
     job_id: jobData.jobId,
-    job_number: jobData.jobNumber,
-    status: jobData.status,
+    job_number: jobData.jobNumber ?? null,
+    status: jobData.status ?? null,
     customer_property_id: jobData.customerPropertyId ?? null,
     customer_name: jobData.customerName ?? null,
     customer_id: jobData.customerId ?? null,
@@ -71,16 +107,34 @@ export async function upsertJob(tenantId: string, jobData: {
     departments: jobData.departments ?? [],
     due_date: jobData.dueDate ?? null,
     is_flagged: jobData.isFlagged ?? false,
+    created_at: jobData.createdAt ?? null,
+    last_updated_at: jobData.lastUpdatedAt ?? null,
+    issue_description: jobData.issueDescription ?? null,
+    customer_provided_job_number: jobData.customerProvidedJobNumber ?? null,
+    customer_provided_po_number: jobData.customerProvidedPoNumber ?? null,
+    billing_customer_id: jobData.billingCustomerId ?? null,
+    billing_customer_name: jobData.billingCustomerName ?? null,
+    invoice_status: jobData.invoiceStatus ?? null,
+    service_agreement_id: jobData.serviceAgreementId ?? null,
+    completed_date: jobData.completedDate ?? null,
+    is_deleted: jobData.isDeleted ?? false,
     audit: jobData.audit ?? null,
   }, { onConflict: 'tenant_id,job_id' });
 }
 
+/**
+ * Fetches a job row by BuildOps job UUID, scoped to the tenant.
+ *
+ * @param tenantId - BuildOps tenant UUID
+ * @param jobId    - BuildOps job UUID
+ * @returns The JobRow, or null if not found
+ */
 export async function getJobByBuildopsId(
   tenantId: string,
   jobId: string,
 ): Promise<JobRow | null> {
   const { data, error } = await supabase
-    .from('jobs')
+    .from('buildops_jobs')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('job_id', jobId)

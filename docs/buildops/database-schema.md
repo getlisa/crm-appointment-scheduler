@@ -1,8 +1,11 @@
-# BuildOps Integration — Database Schema & Sync Jobs
+# BuildOps Integration — Database Schema & Sync
 
 ## Overview
 
-All tables live in a single Supabase (PostgreSQL) project. Every data-bearing table carries `tenant_id` so the schema is multi-tenant from the start. BuildOps UUIDs are stored as-is in `TEXT` columns alongside our own `UUID` primary keys so that we can always round-trip back to BuildOps without a lookup table.
+All tables live in a single Supabase (PostgreSQL) project. Every data-bearing table carries `tenant_id` so the schema is multi-tenant. BuildOps UUIDs are stored as-is in `TEXT` columns alongside our own Postgres-generated `UUID` primary keys.
+
+**Migration file:**
+- `migrations/buildops/20260512_001_buildops_core_tables.sql` — full current-state schema (idempotent, safe to re-run)
 
 ---
 
@@ -10,291 +13,272 @@ All tables live in a single Supabase (PostgreSQL) project. Every data-bearing ta
 
 ### `buildops_tenants`
 
-Holds one row per customer of ours (i.e. per HVAC company). Looked up by inbound E.164 phone number at the very start of every Retell call to resolve credentials and the BuildOps tenant context.
+One row per HVAC company we serve. Looked up by inbound E.164 phone number at the start of every Retell call to resolve credentials and the BuildOps tenant context.
 
 | Column | Type | Constraints | Purpose |
 |---|---|---|---|
-| `no` | TEXT | PRIMARY KEY | E.164 number of the Retell phone line for this tenant (e.g. `+13014507341`). Used as the lookup key when a call arrives — the server does `WHERE no = <dialed_number>` at call start. |
-| `client_id` | TEXT | NOT NULL | BuildOps OAuth client ID for this tenant. |
-| `client_secret` | TEXT | NOT NULL | BuildOps OAuth client secret. Stored here; never logged. |
-| `access_token` | TEXT | NOT NULL | Current short-lived Bearer token. Refreshed by the auth cron. |
+| `no` | TEXT | PRIMARY KEY | E.164 Retell phone line for this tenant (e.g. `+13014507341`). Looked up at call start via `WHERE no = <dialed_number>`. |
+| `client_id` | TEXT | NOT NULL | BuildOps OAuth client ID. |
+| `client_secret` | TEXT | NOT NULL | BuildOps OAuth client secret. Never logged. |
+| `access_token` | TEXT | NOT NULL | Current Bearer token. Refreshed at the start of every cron run. |
 | `buildops_tenant_id` | TEXT | NOT NULL | BuildOps internal tenant UUID. Sent as the `tenantId` header on every API call. |
 
 ---
 
-### `customers`
+### `buildops_customers`
 
-Local mirror of BuildOps customers. The primary lookup table for inbound calls — queried by phone, name, address, and zip during customer identification.
+Local mirror of BuildOps customers. Primary lookup table for inbound calls — queried by phone, name, and address during customer identification.
 
 | Column | Type | Constraints | Purpose |
 |---|---|---|---|
-| `id` | UUID | PRIMARY KEY DEFAULT gen_random_uuid() | Our internal customer identifier. Referenced by `inbound_calls.matched_customer_id` and `representatives.customer_id`. |
-| `tenant_id` | TEXT | NOT NULL | BuildOps tenant UUID (`TENANT_ID` env var). Scopes the row to one HVAC company. No FK — decoupled from the phone-keyed `buildops_tenants` table so seeding doesn't require a tenant row. |
-| `buildops_customer_id` | TEXT | NOT NULL, UNIQUE per tenant | The BuildOps-assigned customer UUID. Used in all BuildOps API calls. |
-| `name` | TEXT | NOT NULL | Company / customer display name. Used in fuzzy name matching. |
-| `phone_primary` | TEXT | | Raw primary phone from BuildOps (may include formatting). |
-| `phone_secondary` | TEXT | | Raw secondary / alternate phone from BuildOps. |
+| `id` | UUID | PRIMARY KEY | Our internal customer identifier. Referenced by `buildops_inbound_calls.matched_customer_id`. |
+| `tenant_id` | TEXT | NOT NULL | BuildOps tenant UUID. Scopes the row to one HVAC company. |
+| `buildops_customer_id` | TEXT | UNIQUE | The BuildOps-assigned customer UUID. Used in all BuildOps API calls. Also the FK target for `buildops_properties` and `buildops_representatives`. |
+| `name` | TEXT | NOT NULL | Company/customer display name. Used in fuzzy name matching. |
+| `phone_primary` | TEXT | | Raw primary phone from BuildOps. |
+| `phone_secondary` | TEXT | | Raw alternate phone from BuildOps. |
 | `is_active` | BOOLEAN | NOT NULL DEFAULT true | Inactive customers are excluded from lookup. |
-| `addresses` | JSONB | | Array of billing/shipping address objects: `{line1, line2, city, state, zip}`. Used in fuzzy address matching. |
-| `normalized_phone_primary` | TEXT | | Last 10 digits of `phone_primary`. Used in OR-match queries alongside `all_numbers`. |
-| `normalized_phone_secondary` | TEXT | | Last 10 digits of `phone_secondary`. |
-| `price_book_id` | TEXT | | BuildOps priceBookId for this customer. Copied onto every job created for this customer. |
-| `all_numbers` | TEXT[] | GIN INDEX | Deduplicated array of every phone number associated with this customer, normalized to last 10 digits. Sources include: customer primary/alternate, all representative cell and landline numbers, and all property phone numbers. Queried with `.contains()` for O(1) exact-phone lookup. |
-| `all_numbers_sources` | TEXT[] | | Parallel to `all_numbers`. Each element names the origin of the corresponding number (e.g. `customer:phonePrimary`, `rep:cellPhone:JohnSmith1`, `property:phonePrimary:abc-uuid`). Used to show which source a matched number came from and to avoid duplicates on re-sync. |
 | `account_number` | TEXT | | BuildOps accountNumber. |
 | `customer_type` | TEXT | | BuildOps customerType. |
-| `status` | TEXT | | Account status from BuildOps (e.g. `active`, `inactive`, `creditHold`, `suspended`, `collections`). Used by `handlePrepareJob` to block job creation for bad-standing accounts. |
-| `email` | TEXT | | Customer email. |
+| `status` | TEXT | | Account status (e.g. `active`, `creditHold`, `suspended`, `collections`). Checked in `handlePrepareJob` to block job creation for bad-standing accounts. |
+| `email` | TEXT | | |
 | `customer_number` | TEXT | | BuildOps customerNumber. |
-| `credit_limit` | DECIMAL | | |
-| `is_taxable` | BOOLEAN | | |
-| `tax_rate_value` | DECIMAL | | |
-| `receive_sms` | BOOLEAN | | |
-| `invoice_delivery_pref` | TEXT | | |
-| `payment_term_id` | TEXT | | BuildOps UUID. |
-| `invoice_preset_id` | TEXT | | BuildOps UUID. |
-| `logo_url` | TEXT | | |
-| `website_url` | TEXT | | |
-| `version` | INTEGER | | BuildOps optimistic lock version. |
-| `amount_not_to_exceed` | DECIMAL | | |
-| `buildops_last_updated_at` | BIGINT | | `audit.lastUpdatedDateTime` (unix ms) — primary incremental-sync trigger. Compared per-row to detect changed customers without a full re-fetch. |
+| `price_book_id` | TEXT | | BuildOps priceBookId. Copied onto every job created for this customer. |
+| `version` | INTEGER | | BuildOps optimistic lock version. Used in incremental dirty detection. |
+| `buildops_last_updated_at` | BIGINT | | `audit.lastUpdatedDateTime` (unix ms). Per-row watermark — the primary incremental-sync trigger for customer + rep + property dirty detection. |
 | `buildops_created_at` | BIGINT | | `audit.createdDateTime` (unix ms). |
-| `representatives` | JSONB | | Embedded array of all representatives for this customer: `[{id, firstName, lastName, cellPhone, landlinePhone, email, propertyId, isActive, isDoNotCall, version}]`. Updated on every dirty-customer rebuild. |
-| `properties` | JSONB | | Embedded array of all properties for this customer: `[{id, companyName, phonePrimary, phoneAlternate, priceBookId, isTaxable, version, addresses:[{addressLine1, addressLine2, city, state, zipcode, addressType}]}]`. Updated on every dirty-customer rebuild. |
+| `all_numbers` | TEXT[] | GIN INDEX | Deduplicated array of every phone number associated with this customer, normalized to last 10 digits. Sources: customer primary/alternate, all rep cell/landline numbers, all property phone numbers. Queried with `.contains()` for O(1) exact-phone lookup. |
+| `all_numbers_sources` | TEXT[] | | Parallel to `all_numbers`. Each element names the origin (e.g. `customer:phonePrimary`, `rep:cellPhone:JohnSmith`, `property:phonePrimary:<uuid>`). |
+| `property_ids` | TEXT[] | NOT NULL DEFAULT '{}' | BuildOps property UUIDs belonging to this customer. Kept in sync by the cron — use to join against `buildops_properties.id`. |
+| `representative_ids` | UUID[] | NOT NULL DEFAULT '{}' | Our `buildops_representatives.id` UUIDs for this customer. Populated after each rep upsert batch by querying back the auto-assigned UUIDs. |
+| `billing_address` | TEXT | | Formatted address string from `addresses[addressType=billingAddress]`, e.g. `"123 Main St, Richmond, VA 23219"`. |
+| `business_address` | TEXT | | Formatted address string from the primary service address (first non-billing address, or first address if none). |
 
-**Recommended indexes:**
+**Unique constraints:**
+- `(tenant_id, buildops_customer_id)` — composite key for upserts
+- `(buildops_customer_id)` — required as FK target for child tables
+
+**Indexes:**
 - GIN on `all_numbers` — required for `contains` array queries
-- B-tree on `(tenant_id, buildops_customer_id)` — unique constraint + fast upsert
+- B-tree on `(tenant_id, buildops_customer_id)` — fast upsert
 - B-tree on `tenant_id` — scopes nearly every query
-- GIN on `addresses` — required for JSON `cs` (contains-all) queries filtering by zip
 
 ---
 
-### `property`
+### `buildops_properties`
 
-Local mirror of BuildOps service locations (properties). One customer can have many properties. Used during job creation to validate that the chosen property belongs to the confirmed customer.
+Local mirror of BuildOps service locations. One customer → many properties.
 
 | Column | Type | Constraints | Purpose |
 |---|---|---|---|
 | `id` | TEXT | PRIMARY KEY | BuildOps property UUID. |
-| `name` | TEXT | | Property display name (often the location nickname). |
+| `name` | TEXT | | Property display name. |
 | `phone_primary` | TEXT | | Property-level contact phone. Contributes to the parent customer's `all_numbers`. |
-| `customer_id` | TEXT | NOT NULL | References our `customers.id`. Used to verify ownership during job preparation. |
-| `address` | JSONB | NOT NULL | Service address: `{line1, line2, city, state, zip}`. Used in address fuzzy-matching during customer identification and shown to the agent during job confirmation. |
+| `customer_id` | TEXT | NOT NULL, FK → `buildops_customers(buildops_customer_id)` ON DELETE CASCADE | The BuildOps customer UUID this property belongs to. |
+| `address` | JSONB | NOT NULL | Service address: `{line1, line2, city, state, zip}`. |
 
-**Recommended indexes:**
-- B-tree on `customer_id` — most common filter
-- GIN on `address` — supports `address->>'line1' ILIKE` queries used in fuzzy candidate search
+**Indexes:**
+- B-tree on `customer_id`
+- GIN on `address`
 
 ---
 
-### `representatives`
+### `buildops_representatives`
 
-Local mirror of BuildOps customer representatives (contacts). Stored so that representative phone numbers can be pre-indexed into `customers.all_numbers` without a live API call during a call.
+Local mirror of BuildOps customer representatives (contacts). Phone numbers are pre-indexed into the parent customer's `all_numbers` column so no live API call is needed during a call.
 
 | Column | Type | Constraints | Purpose |
 |---|---|---|---|
-| `id` | UUID | PRIMARY KEY DEFAULT gen_random_uuid() | Our internal rep identifier. |
-| `tenant_id` | UUID | NOT NULL | Tenant scope. |
-| `customer_id` | TEXT | NOT NULL | References our `customers.id`. |
+| `id` | UUID | PRIMARY KEY DEFAULT gen_random_uuid() | Our internal rep UUID. Stored in `buildops_customers.representative_ids`. |
+| `tenant_id` | TEXT | NOT NULL | Tenant scope. |
+| `customer_id` | TEXT | NOT NULL, FK → `buildops_customers(buildops_customer_id)` ON DELETE CASCADE | Parent customer's BuildOps UUID. |
 | `property_id` | TEXT | NOT NULL | BuildOps property UUID this rep is associated with. |
-| `first_name` | TEXT | NOT NULL | First name. Combined with `last_name` for name-collision suffix generation (`JohnSmith1`, `JohnSmith2`). |
-| `last_name` | TEXT | NOT NULL | Last name. |
+| `first_name` | TEXT | NOT NULL | |
+| `last_name` | TEXT | NOT NULL | |
 | `cell_phone` | TEXT | | Raw cell phone string from BuildOps. |
-| `landline_phone` | TEXT | | Raw landline phone string from BuildOps. |
-| `normalized_cell_phone` | TEXT | | Last 10 digits of `cell_phone`. Used in OR-queries. |
+| `landline_phone` | TEXT | | Raw landline phone string. |
+| `normalized_cell_phone` | TEXT | | Last 10 digits of `cell_phone`. |
 | `normalized_landline_phone` | TEXT | | Last 10 digits of `landline_phone`. |
-| `email` | TEXT | | Contact email. |
-| `is_active` | BOOLEAN | DEFAULT true | Inactive reps are excluded from sync output. |
-| `is_do_not_call` | BOOLEAN | DEFAULT false | DNC flag from BuildOps. |
+| `email` | TEXT | | |
+| `is_active` | BOOLEAN | DEFAULT true | |
+| `is_do_not_call` | BOOLEAN | DEFAULT false | |
 | `is_email_opt_out` | BOOLEAN | DEFAULT false | |
 | `is_sms_opt_out` | BOOLEAN | DEFAULT false | |
 | `created_at` | TIMESTAMPTZ | | From BuildOps audit data. |
-| `updated_at` | TIMESTAMPTZ | | From BuildOps audit data. Used for incremental sync. |
-| `version` | INTEGER | DEFAULT 0 | BuildOps optimistic lock version. Used to skip unchanged records in incremental sync. |
+| `updated_at` | TIMESTAMPTZ | | From BuildOps audit data. Compared against `buildops_customers.buildops_last_updated_at` to detect rep-driven customer dirtiness. |
+| `version` | INTEGER | DEFAULT 0 | BuildOps optimistic lock version. |
 
-**Recommended indexes:**
+**Indexes:**
 - B-tree on `(tenant_id, customer_id)`
-- B-tree on `(normalized_cell_phone, normalized_landline_phone)` — direct phone lookup fallback
+- B-tree on `(normalized_cell_phone, normalized_landline_phone)`
 
 ---
 
-### `inbound_calls`
+### `buildops_inbound_calls`
 
-One row per Retell call. Created when the call starts (`call_started` webhook) and updated throughout the call lifecycle. Holds the full session state including any pending jobs queued during the call.
+One row per Retell call. Created at `call_started`/`call_inbound`, updated throughout the call lifecycle.
 
 | Column | Type | Constraints | Purpose |
 |---|---|---|---|
-| `id` | UUID | PRIMARY KEY DEFAULT gen_random_uuid() | Internal row ID. |
-| `retell_call_id` | TEXT | NOT NULL, UNIQUE | Retell's call identifier. Used as the session key throughout the call. |
-| `tenant_id` | UUID | NOT NULL | Resolved from the dialed number at call start. |
-| `caller` | TEXT | | E.164 number of the caller. Used for exact-phone customer lookup and new-number detection. |
-| `receiver` | TEXT | NOT NULL | E.164 number that was dialed (the tenant's phone line). |
-| `matched_customer_id` | TEXT | | Our `customers.id` — set once the customer is identified during the call. NULL until identification succeeds. |
-| `status` | TEXT | NOT NULL DEFAULT 'active' | Call lifecycle state. Values: `active` → `job_created` (after `call_ended` processes the job) or `handed_off` (transferred to human) or `ended`. |
-| `buildops_job_id` | TEXT | | BuildOps job UUID — set after `executeJobCreation` completes post-call. |
-| `pending_jobs` | JSONB | NOT NULL DEFAULT '[]' | Array of `PendingJobData` objects collected during the call. Each element contains all the data needed to call `POST /v1/jobs` after the call ends. Schema: `{customerPropertyId, jobTypeId, priceBookId, isUseTaxable, status, propertyAddress?, needsReview?, departmentId?, tasks[]}`. `jobTypeId` and `departmentId` are populated server-side from hardcoded defaults — not from the agent. Populated via `append_pending_job`. |
+| `id` | UUID | PRIMARY KEY | Internal row ID. |
+| `retell_call_id` | TEXT | NOT NULL, UNIQUE | Retell's call identifier. Session key throughout the call. |
+| `tenant_id` | TEXT | NOT NULL | Resolved from `buildops_tenants` at call start via the dialed number. |
+| `caller` | TEXT | | E.164 caller number. Used for exact-phone customer lookup and new-number detection. |
+| `matched_customer_id` | TEXT | | `buildops_customers.id` (our UUID) — set once the customer is identified. NULL until identification succeeds. |
+| `status` | TEXT | NOT NULL DEFAULT 'active' | `active` → `ended` (normal end) or `handed_off` (transferred to human). |
+| `buildops_job_id` | TEXT | | BuildOps job UUID — set immediately when `prepare_job` completes (not deferred to call end). |
 
 ---
 
-### `jobs`
+### `buildops_jobs`
 
-Local mirror of every job created through the integration. Used for audit, reporting, and future webhook reconciliation.
+Mirror of every job created through or synced from BuildOps. Jobs are written immediately during the call when `prepare_job` fires. The 5-minute cron then keeps the table in sync with any changes made directly in BuildOps (status updates, cancellations, etc.).
 
 | Column | Type | Constraints | Purpose |
 |---|---|---|---|
-| `id` | UUID | PRIMARY KEY DEFAULT gen_random_uuid() | |
-| `job_id` | TEXT | NOT NULL | BuildOps job UUID returned by `POST /v1/jobs`. |
-| `job_number` | TEXT | | Human-readable BuildOps job number (e.g. `JOB-00123`). |
-| `status` | TEXT | | Job status at creation time (`Open`, `In Progress`, etc.). |
-| `customer_property_id` | TEXT | | BuildOps property UUID the job was created against. |
-| `customer_name` | TEXT | | Denormalized customer name at job creation time. |
+| `id` | UUID | PRIMARY KEY | Internal row ID. |
+| `tenant_id` | TEXT | NOT NULL | |
+| `job_id` | TEXT | NOT NULL | BuildOps job UUID. |
+| `job_number` | TEXT | | Human-readable job number (e.g. `JOB-00123`). |
+| `status` | TEXT | | `Open` \| `In Progress` \| `On Hold` \| `Canceled` \| `Complete` |
+| `customer_property_id` | TEXT | | BuildOps property UUID. |
+| `customer_name` | TEXT | | Denormalized at creation time. |
 | `customer_id` | TEXT | | BuildOps customer UUID. |
 | `job_type_id` | TEXT | | BuildOps job type UUID. |
-| `job_type_name` | TEXT | | Display name of the job type. Not populated by our handler (NULL); present for future use if the BuildOps API response is mapped here. |
-| `price_book_id` | TEXT | | Price book UUID used for the job. Sourced from `customers.price_book_id`. |
-| `priority` | TEXT | | Job priority level if set. |
+| `job_type_name` | TEXT | | |
+| `price_book_id` | TEXT | | |
+| `priority` | TEXT | | |
 | `version` | INTEGER | DEFAULT 0 | BuildOps optimistic lock version. |
-| `billing_status` | TEXT | | From BuildOps job response. |
-| `review_status` | TEXT | | From BuildOps job response. |
+| `billing_status` | TEXT | | |
+| `review_status` | TEXT | | |
 | `billing_type` | TEXT | | |
 | `amount_quoted` | DECIMAL | | |
-| `is_use_taxable` | BOOLEAN | DEFAULT false | Whether the job is subject to use tax. Copied from customer's tax configuration. |
-| `departments` | JSONB | DEFAULT '[]' | Array of `{id, name}` objects from BuildOps response. |
+| `is_use_taxable` | BOOLEAN | DEFAULT false | |
+| `departments` | JSONB | DEFAULT '[]' | `[{id, name}]` from BuildOps response. |
 | `due_date` | TEXT | | |
-| `is_flagged` | BOOLEAN | DEFAULT false | Flagged for manual attention. |
-| `tenant_id` | UUID | NOT NULL | |
-| `audit` | JSONB | | Raw BuildOps audit block (`{createdDate, lastUpdatedDate}`). |
-| UNIQUE | | `(tenant_id, job_id)` | Prevents duplicate rows if `call_ended` fires more than once. |
+| `is_flagged` | BOOLEAN | DEFAULT false | |
+| `audit` | JSONB | | Raw BuildOps audit block. |
+| `created_at` | BIGINT | | `audit.createdDateTime` (unix ms). |
+| `last_updated_at` | BIGINT | | `audit.lastUpdatedDateTime` (unix ms). **Sync watermark** — `MAX(last_updated_at)` per tenant is used by the cron to compute the `lastUpdatedDateStart` query parameter for the next incremental fetch. |
+| `issue_description` | TEXT | | |
+| `customer_provided_job_number` | TEXT | | |
+| `customer_provided_po_number` | TEXT | | |
+| `billing_customer_id` | TEXT | | |
+| `billing_customer_name` | TEXT | | |
+| `invoice_status` | TEXT | | |
+| `service_agreement_id` | TEXT | | |
+| `completed_date` | BIGINT | | Unix ms when job was completed. |
+| `is_deleted` | BOOLEAN | NOT NULL DEFAULT false | `true` when `audit.deletedDateTime` is set in the API response. Soft-delete — rows are never physically removed. Filter `WHERE is_deleted = false` for active jobs. |
+| UNIQUE | | `(tenant_id, job_id)` | Prevents duplicate rows on re-upsert. |
+
+**Indexes:**
+- B-tree on `(tenant_id, last_updated_at)` — watermark query + range scans
 
 ---
 
-### `departments`
+### `buildops_departments`
 
-Local copy of BuildOps departments. Synced separately. **Not queried during live calls** — the department attached to every created job is resolved from the hardcoded constant `DEFAULT_DEPARTMENT_ID` in `src/services/buildops/handlers/job.ts` ("D2 Service Calls (T&M)", ID `d87c1a38-4acd-459f-9b3f-446a810fae10`). Run `scripts/get_department_id.ts` if the ID ever needs to be updated.
+Local copy of BuildOps departments. **Not queried during live calls** — the department is resolved from the hardcoded constant `DEFAULT_DEPARTMENT_ID` in `src/services/buildops/handlers/job.ts`.
 
-| Column | Type | Constraints | Purpose |
-|---|---|---|---|
-| `id` | TEXT | PRIMARY KEY | BuildOps department UUID. |
-| `tag_name` | TEXT | NOT NULL | Human-readable department label. |
-| `tenant_id` | UUID | NOT NULL | |
-| `phone_primary` | TEXT | | Department contact number. |
-| `email` | TEXT | | |
-| `is_active` | BOOLEAN | DEFAULT true | |
-
----
-
----
-
-## Sync Jobs
-
-These jobs keep the local Supabase tables and `customers.csv` in sync with BuildOps. They run on a schedule and do not affect live call handling directly — the call path reads only from Supabase.
-
----
-
-### 1. Full Customer Sync (`scripts/buildops/cron/full-sync.ts`)
-
-**Purpose:** Populate (or fully rebuild) `customers.csv` with every customer from BuildOps, including embedded representatives and properties. Run this first before any incremental sync.
-
-**Trigger:** Manual first run; daily at off-peak hours.
-
-**Steps:**
-1. Authenticate with BuildOps via `POST /v1/auth/token`; obtain access token.
-2. Fetch all properties (paginated, 100/page, `include_addresses=true`) — build `propMap` (`customerId → PropertySummary[]`) and `propPhoneMap` (`customerId → PhoneEntry[]`).
-3. Fetch all customers (paginated, 100/page, `include_inactive=true`).
-4. For every customer:
-   - Fetch all representatives via `GET /v1/customers/{id}/our-representatives` (paginated, 100/page).
-   - Build `all_numbers` + `all_numbers_sources` (customer phones → rep phones → property phones, deduplicated, first source wins).
-   - Build `addresses_all` from `customer.addresses.items`.
-   - Set `representatives` JSON from fetched reps.
-   - Set `properties` JSON from `propMap`.
-   - Set `last_updated` from `audit.lastUpdatedDateTime`; `last_added` from `audit.createdDateTime`.
-5. Write `scripts/buildops/output/customers.csv`.
-6. Write `sync_state.json` with `lastSyncedMs = max(last_updated across all customers)`.
-
----
-
-### 2. Incremental Customer Sync (`scripts/buildops/cron/incremental-sync.ts`)
-
-**Purpose:** Re-build only changed customers. Intended to run every 15–30 minutes.
-
-**Trigger:** Scheduled cron (15–30 min interval). Requires `customers.csv` to exist (run full sync first).
-
-**Dirty detection — three independent sources, all evaluated before the customer loop:**
-
-| Source | Trigger condition | Action |
+| Column | Type | Purpose |
 |---|---|---|
-| Customer timestamp | `customer.audit.lastUpdatedDateTime > existing_row.last_updated` | Mark customer dirty |
-| Property change | `property.audit.lastUpdatedDateTime > existingCustomerRow.last_updated` | Mark parent customer dirty |
-| Representative change | `SELECT DISTINCT customer_id FROM representatives WHERE updated_at > lastSyncedMs` | Mark those customers dirty |
+| `id` | TEXT PRIMARY KEY | BuildOps department UUID. |
+| `tag_name` | TEXT NOT NULL | Human-readable label. |
+| `tenant_id` | TEXT NOT NULL | |
+| `phone_primary` | TEXT | |
+| `email` | TEXT | |
+| `is_active` | BOOLEAN DEFAULT true | |
+
+---
+
+## Sync Architecture
+
+All sync runs in a single Deno edge function deployed to Supabase: `src/services/buildops/supabase/buildops-cron/index.ts`.  
+The function is triggered by pg_cron via `net.http_post` to `supabase.co/functions/v1/buildops_cron`.  
+See [`docs/buildops/sync.md`](sync.md) for the full sync architecture.
+
+For each tenant it does two things **in parallel**:
+1. Customer/property/rep sync (`fullSeed` or `incrementalSync`)
+2. Jobs incremental sync (`jobsSync`)
+
+---
+
+### A. Customer / Property / Representative Sync
+
+#### Full Seed (first run — `buildops_customers` is empty)
+
+1. Fetch all properties (paginated, 100/page, `include_addresses=true`) → upsert `buildops_properties` → build `propMap` and `propPhoneMap` in memory.
+2. Fetch all customers (paginated, 100/page, `include_inactive=true`).
+3. Fetch all reps in parallel batches of 15 concurrent `GET /v1/customers/{id}/our-representatives` calls.
+4. For each customer:
+   - Build `all_numbers` + `all_numbers_sources` (customer phones → rep phones → property phones, deduplicated, first source wins).
+   - Extract `billing_address` from `addresses[addressType=billingAddress]`; `business_address` from the first non-billing address.
+   - Set `property_ids` to the IDs of all properties in `propMap` for this customer.
+5. Upsert `buildops_customers` (conflict on `tenant_id, buildops_customer_id`).
+6. Delete all existing reps for the tenant, then insert fresh rep rows into `buildops_representatives`.
+7. Query back `(id, customer_id)` from `buildops_representatives` and write the auto-assigned UUIDs into `buildops_customers.representative_ids`.
+
+#### Incremental Sync (subsequent runs)
+
+**Dirty detection — three independent sources evaluated before the customer loop:**
+
+| Source | Trigger | Action |
+|---|---|---|
+| Customer timestamp | `customer.audit.lastUpdatedDateTime > buildops_customers.buildops_last_updated_at` | Mark customer dirty |
+| Customer version | `customer.version > buildops_customers.version` | Mark customer dirty |
+| Property change | `property.audit.lastUpdatedDateTime > parent_customer.buildops_last_updated_at` | Mark parent customer dirty |
+| Rep change | `buildops_representatives.updated_at > parent_customer.buildops_last_updated_at` (queried from DB) | Mark parent customer dirty |
+| New customer | No existing row in `buildops_customers` | Always rebuild |
 
 **Steps:**
-1. Authenticate + init Supabase client.
-2. Load `customers.csv` → `existingRows` map; compute `lastSyncedMs = min(last_updated across all rows)`.
-3. Batch-query Supabase `representatives` for rows with `updated_at > lastSyncedMs` → add their `customer_id` to `dirtySet`.
-4. Fetch all properties (100/page, `include_addresses=true`) → build `propMap` + `propPhoneMap`; property-dirty customers added to `dirtySet`.
-5. Fetch all customers (100/page) — early-stop when a full page has all `lastUpdatedDateTime <= lastSyncedMs`.
-6. For each fetched customer: if dirty (by timestamp or in `dirtySet`) → fetch fresh reps, rebuild row; otherwise reuse existing row.
-7. For `dirtySet` customers not reached due to early-stop: re-fetch reps only and rebuild from existing CSV row.
-8. Write updated `customers.csv`; write `sync_state.json`.
+1. Load `(buildops_customer_id, buildops_last_updated_at, version)` for all existing rows of this tenant → build `dbCustomerMap`.
+2. Fetch all properties → upsert `buildops_properties`, delete any properties no longer in the API response.
+3. Query `buildops_representatives` for all `(customer_id, updated_at)` to detect rep-driven dirty customers.
+4. Page through all customers (100/page): skip clean ones, fetch fresh reps only for dirty ones.
+5. Upsert dirty customer rows.
+6. For each dirty customer: delete its old rep rows, insert fresh rows, then update `representative_ids` on the customer.
+
+**Outcome:** Only changed customers (and their reps) are re-fetched from BuildOps. Clean customers are skipped entirely.
 
 ---
 
-### 3. Access Token Refresh
+### B. Jobs Incremental Sync (`jobsSync`)
 
-**Purpose:** BuildOps access tokens have a limited TTL (~60 min). This job exchanges each tenant's stored `client_id` + `client_secret` for a fresh token and writes it back to `buildops_tenants.access_token`.
+Runs every cron cycle for every tenant, in parallel with the customer sync.
 
-**Implementation:** `scripts/buildops/cron/refresh_access_token.sql`
-— A PostgreSQL function (`public.refresh_buildops_access_tokens`) scheduled via **pg_cron + pg_net** (both enabled by default on Supabase). Install by running the SQL file in the Supabase SQL Editor.
-
-**Trigger:** Every 50 minutes (`*/50 * * * *`).
-
-**Steps (inside the SQL function):**
-1. For each row in `buildops_tenants`:
-   - `pg_net.http_post` → `POST /v1/auth/token` with `{clientId, clientSecret, tenantId}`.
-   - `net.http_collect_response(request_id, async := false)` blocks until the response arrives.
-   - On HTTP 200: extract `access_token` from response body, `UPDATE buildops_tenants SET access_token = …`.
-   - On failure: emit a `RAISE WARNING` (visible in Supabase Logs → Database).
-2. A stale token blocks all live calls for that tenant — monitor Supabase warnings if calls start failing auth.
-
----
-
-## Initial Data Seeding
-
-**Script:** `scripts/buildops/seed-tables.ts`
-
-Seeds `buildops_tenants`, `buildops_customers`, `buildops_properties`, and `buildops_representatives` by pulling live data from the BuildOps API.
-
-**Required `.env` vars:**
-
-| Variable | Purpose |
-|---|---|
-| `SUPABASE_URL` | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key (bypasses RLS) |
-| `CLIENT_ID` | BuildOps OAuth client ID |
-| `CLIENT_SECRET` | BuildOps OAuth client secret |
-| `TENANT_ID` | BuildOps tenant UUID |
-| `INBOUND_PHONE` | E.164 Retell phone line for this tenant (e.g. `+13014507341`) |
-
-**Order of operations:**
-1. Authenticate → obtain `access_token` (written to `buildops_tenants`).
-2. Upsert `buildops_tenants` using `INBOUND_PHONE` as the primary key.
-3. Fetch all properties (with addresses) → upsert `buildops_properties`.
-4. Fetch all customers → for each, fetch representatives → upsert `buildops_customers` with embedded `representatives` + `properties` JSON, and insert into `buildops_representatives`.
-
-```bash
-npx tsx scripts/buildops/seed-tables.ts
+**Watermark strategy:**
 ```
+watermark = SELECT MAX(last_updated_at) FROM buildops_jobs WHERE tenant_id = ?
+```
+On first run the table is empty → watermark is `0` (epoch) → fetches all jobs. On subsequent runs only jobs updated since the last highest `last_updated_at` are fetched.
+
+**Steps:**
+1. Compute watermark from `MAX(last_updated_at)`.
+2. Call `GET /v1/jobs?lastUpdatedDateStart=<watermark-as-ISO>&page_size=100` (paginated until empty page).
+3. For each job in the API response, map to a `buildops_jobs` row:
+   - `created_at` ← `audit.createdDateTime`
+   - `last_updated_at` ← `audit.lastUpdatedDateTime`
+   - `is_deleted` ← `audit.deletedDateTime != null` (BuildOps soft-deletes via this field, not via a status change)
+4. Upsert all rows on conflict `(tenant_id, job_id)` — overwrites every field including `status`, `is_deleted`, etc.
+5. Return `{ synced: N, watermark: newMax }`.
+
+**Coverage:**
+| Event | How it reaches Supabase |
+|---|---|
+| Job created via Retell call | Written immediately during `prepare_job` before Retell gets a response |
+| Job created manually in BuildOps | Picked up on the next cron run (≤5 min lag) |
+| Job status updated in BuildOps | `last_updated_at` advances → picked up on next cron run |
+| Job soft-deleted in BuildOps | `audit.deletedDateTime` is set → `is_deleted = true` on next cron run |
 
 ---
 
 ## Hardcoded Defaults (job creation)
 
-Two values are resolved server-side at job creation time from constants in `src/services/buildops/handlers/job.ts` rather than from environment variables or agent input:
+Resolved server-side from constants in `src/services/buildops/handlers/job.ts`:
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `DEFAULT_JOB_TYPE_ID` | `04df1a40-16b1-43f4-aa9b-8eafcec812ad` | BuildOps job type for "Time & Material" |
-| `DEFAULT_DEPARTMENT_ID` | `d87c1a38-4acd-459f-9b3f-446a810fae10` | BuildOps department "D2 Service Calls (T&M)" |
+| `DEFAULT_JOB_TYPE_ID` | `04df1a40-16b1-43f4-aa9b-8eafcec812ad` | BuildOps job type "Time & Material" |
+| `DEFAULT_DEPARTMENT_ID` | `d87c1a38-4acd-459f-9b3f-446a810fae10` | "D2 Service Calls (T&M)" department |
 
-To look up or verify the department ID: `npx tsx scripts/get_department_id.ts` (auto-refreshes the access token using `CLIENT_ID` / `CLIENT_SECRET` from `.env`).
+To look up or verify the department ID: `npx tsx scripts/get_department_id.ts`.

@@ -1,3 +1,10 @@
+/**
+ * Retell function handlers for saving and creating customer representatives.
+ * save_caller_number: saves the caller's current phone to the account (best-effort API mirror).
+ * add_representative: creates a new named contact in BuildOps and mirrors locally.
+ * Both append the new phone to all_numbers immediately so future calls identify correctly.
+ */
+
 import { getCustomerById, appendToCustomerAllNumbers } from '../db/customers.js';
 import { createRepresentative } from '../db/representatives.js';
 import { createCustomerRepresentative } from '../client.js';
@@ -5,6 +12,16 @@ import type { InboundCallRow, BuildOpsContext, RetellFunctionResult } from '../t
 
 // ── Save caller's current phone number as a representative on the account ─────
 
+/**
+ * Saves the caller's phone number as a representative on the confirmed customer account.
+ * Creates the rep in local DB (blocking), mirrors to BuildOps API (best-effort),
+ * and appends the phone to all_numbers for immediate future-call recognition.
+ *
+ * @param session - Current call session (matchedCustomerId must be set)
+ * @param ctx     - BuildOps API context
+ * @param args    - Optional: phone_number (defaults to session.caller), first_name, last_name
+ * @returns RetellFunctionResult — status: saved | error
+ */
 export async function handleSaveCallerNumber(
   session: InboundCallRow,
   ctx: BuildOpsContext,
@@ -69,6 +86,16 @@ export async function handleSaveCallerNumber(
 
 // ── Add a new named contact/representative to the customer account ────────────
 
+/**
+ * Creates a new named representative on the BuildOps customer account.
+ * BuildOps API call is blocking (must succeed). Local DB write and all_numbers
+ * update are best-effort and do not fail the function if they error.
+ *
+ * @param session - Current call session (matchedCustomerId must be set)
+ * @param ctx     - BuildOps API context
+ * @param args    - Required: first_name, last_name, and at least one of phone or email
+ * @returns RetellFunctionResult — status: added (with representative_id) | error
+ */
 export async function handleAddRepresentative(
   session: InboundCallRow,
   ctx: BuildOpsContext,

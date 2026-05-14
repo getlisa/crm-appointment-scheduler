@@ -1,3 +1,10 @@
+/**
+ * Retell function handler: lookup_customer_fuzzy.
+ * Scores DB candidates using multi-algorithm fuzzy matching, assigns confidence
+ * tiers, and returns found/multiple_matches/not_found. Tier 1 accepts auto-confirm
+ * the customer; Tier 2 accepts require verbal confirmation; Tier 3 transfers the call.
+ */
+
 import { getFuzzyCandidates } from '../db/customers.js';
 import { setMatchedCustomer, setCallStatus } from '../db/inbound-calls.js';
 import { getPropertiesForCustomer } from '../db/properties.js';
@@ -9,6 +16,14 @@ import {
 } from '../fuzzy-search.js';
 import type { InboundCallRow, FuzzyQuery, RetellFunctionResult } from '../types.js';
 
+/**
+ * Handles the lookup_customer_fuzzy Retell function call.
+ * Requires at least one of: name, zip, address, property_address in args.
+ *
+ * @param session - Current inbound call session with tenantId and caller
+ * @param args    - Function arguments from Retell: name, address, property_address, zip, old_phone
+ * @returns RetellFunctionResult — status: found | multiple_matches | not_found, with supporting fields
+ */
 export async function handleLookupFuzzy(
   session: InboundCallRow,
   args: Record<string, unknown>,

@@ -1,3 +1,10 @@
+/**
+ * BuildOps REST API client.
+ * All requests are authenticated with a Bearer token + tenantId header.
+ * Non-2xx responses throw an Error with the status code and response body.
+ * Base URL and credentials are provided via BuildOpsContext passed to each function.
+ */
+
 import type {
   BuildOpsContext,
   BuildOpsJobResponse,
@@ -49,6 +56,12 @@ export interface JobTypeItem {
   isActive?: boolean;
 }
 
+/**
+ * Lists all job types for the tenant. Used during config/admin to find the UUID for "Time & Material".
+ *
+ * @param ctx - BuildOps API context
+ * @returns Array of JobTypeItem with id, name, and isActive
+ */
 export async function getJobTypes(ctx: BuildOpsContext): Promise<JobTypeItem[]> {
   const data = await request<{ data?: JobTypeItem[] } | JobTypeItem[]>(
     ctx, 'GET', `/v1/job-types?tenantId=${ctx.buildopsTenantId}`,
@@ -58,6 +71,13 @@ export async function getJobTypes(ctx: BuildOpsContext): Promise<JobTypeItem[]> 
 
 // ── Jobs ──────────────────────────────────────────────────────────────────────
 
+/**
+ * Creates a new job in BuildOps.
+ *
+ * @param ctx   - BuildOps API context
+ * @param input - Job creation payload (customerPropertyId, jobTypeId, priceBookId, etc.)
+ * @returns BuildOps job UUID and human-readable job number
+ */
 export async function createJob(
   ctx: BuildOpsContext,
   input: CreateJobInput,
@@ -66,10 +86,24 @@ export async function createJob(
   return { jobId: job.id, jobNumber: job.jobNumber };
 }
 
+/**
+ * Fetches a single job by BuildOps job UUID.
+ *
+ * @param ctx   - BuildOps API context
+ * @param jobId - BuildOps job UUID
+ * @returns Full BuildOpsJobResponse
+ */
 export async function getJob(ctx: BuildOpsContext, jobId: string): Promise<BuildOpsJobResponse> {
   return request<BuildOpsJobResponse>(ctx, 'GET', `/v1/jobs/${jobId}`);
 }
 
+/**
+ * Updates an existing job. Requires version for optimistic locking.
+ *
+ * @param ctx   - BuildOps API context
+ * @param jobId - BuildOps job UUID
+ * @param body  - Fields to update plus the current version number
+ */
 export async function updateJob(
   ctx: BuildOpsContext,
   jobId: string,
@@ -78,6 +112,13 @@ export async function updateJob(
   await request(ctx, 'PUT', `/v1/jobs/${jobId}`, body);
 }
 
+/**
+ * Adds a tag to an existing job (for department assignment or review flagging).
+ *
+ * @param ctx     - BuildOps API context
+ * @param jobId   - BuildOps job UUID
+ * @param tagData - Tag payload as required by the BuildOps API
+ */
 export async function createJobTag(
   ctx: BuildOpsContext,
   jobId: string,
@@ -86,6 +127,14 @@ export async function createJobTag(
   await request(ctx, 'POST', `/v1/jobs/${jobId}/tags`, tagData);
 }
 
+/**
+ * Creates a task (line item group) on an existing job.
+ *
+ * @param ctx     - BuildOps API context
+ * @param jobId   - BuildOps job UUID
+ * @param name    - Task display name shown on the work order
+ * @param entries - Array of product line items with productId and optional quantity/description
+ */
 export async function createTask(
   ctx: BuildOpsContext,
   jobId: string,
@@ -105,6 +154,15 @@ export interface BuildOpsCustomerResponse {
   addresses?: AddressObj[];
 }
 
+/**
+ * Fetches a single customer by BuildOps customer UUID.
+ * Called mid-call in handlePrepareJob to read the live account status before creating a job.
+ *
+ * @param ctx         - BuildOps API context
+ * @param customerId  - BuildOps customer UUID
+ * @param addressType - Optional filter (e.g. 'billingAddress') to scope returned addresses
+ * @returns Customer data including live status field
+ */
 export async function getCustomer(
   ctx: BuildOpsContext,
   customerId: string,
@@ -117,6 +175,13 @@ export async function getCustomer(
 }
 
 
+/**
+ * Updates a customer record in BuildOps.
+ *
+ * @param ctx        - BuildOps API context
+ * @param customerId - BuildOps customer UUID
+ * @param body       - Fields to update
+ */
 export async function updateCustomer(
   ctx: BuildOpsContext,
   customerId: string,
@@ -127,6 +192,13 @@ export async function updateCustomer(
 
 // ── Properties ────────────────────────────────────────────────────────────────
 
+/**
+ * Fetches a single property by BuildOps property UUID.
+ *
+ * @param ctx        - BuildOps API context
+ * @param propertyId - BuildOps property UUID
+ * @returns Raw property object from the API
+ */
 export async function getProperty(
   ctx: BuildOpsContext,
   propertyId: string,
@@ -134,6 +206,13 @@ export async function getProperty(
   return request(ctx, 'GET', `/v1/properties/${propertyId}?tenantId=${ctx.buildopsTenantId}`);
 }
 
+/**
+ * Fetches all properties for the tenant (first page only, no pagination).
+ * Intended for admin/config tooling; use the cron sync for full property mirroring.
+ *
+ * @param ctx - BuildOps API context
+ * @returns Array of PropertyRow
+ */
 export async function getPropertiesByTenant(ctx: BuildOpsContext): Promise<PropertyRow[]> {
   const data = await request<{ data?: PropertyRow[] } | PropertyRow[]>(
     ctx, 'GET', `/v1/properties?tenantId=${ctx.buildopsTenantId}`,
@@ -141,6 +220,16 @@ export async function getPropertiesByTenant(ctx: BuildOpsContext): Promise<Prope
   return Array.isArray(data) ? data : (data as { data?: PropertyRow[] }).data ?? [];
 }
 
+/**
+ * Creates a new service location property in BuildOps.
+ * BuildOps requires coordinates on creation; address fields can be added separately.
+ *
+ * @param ctx        - BuildOps API context
+ * @param customerId - BuildOps customer UUID to associate the property with
+ * @param latitude   - Property latitude
+ * @param longitude  - Property longitude
+ * @returns BuildOps property UUID
+ */
 export async function createProperty(
   ctx: BuildOpsContext,
   customerId: string,
@@ -163,6 +252,14 @@ export interface RepresentativePhoneItem {
   landlinePhone: string | null;
 }
 
+/**
+ * Fetches all representatives for a customer, paginated.
+ * Used during sync to collect rep phone numbers for the all_numbers aggregation.
+ *
+ * @param ctx                - BuildOps API context
+ * @param buildopsCustomerId - BuildOps customer UUID
+ * @returns All representative phone items (auto-paginated, 100/page)
+ */
 export async function getCustomerRepresentatives(
   ctx: BuildOpsContext,
   buildopsCustomerId: string,
@@ -184,6 +281,15 @@ export async function getCustomerRepresentatives(
   return results;
 }
 
+/**
+ * Creates a new representative on a BuildOps customer account.
+ * Called mid-call when add_representative fires and the customer confirmed.
+ *
+ * @param ctx                - BuildOps API context
+ * @param buildopsCustomerId - BuildOps customer UUID
+ * @param data               - Representative data: firstName, lastName, and optionally cellPhone/landlinePhone
+ * @returns Object containing the new representative's BuildOps UUID
+ */
 export async function createCustomerRepresentative(
   ctx: BuildOpsContext,
   buildopsCustomerId: string,
@@ -194,8 +300,54 @@ export async function createCustomerRepresentative(
   );
 }
 
+// ── Paginated jobs list (used by cron incremental sync) ───────────────────────
+
+/**
+ * Fetches all jobs updated since a given Unix-millisecond timestamp (incremental sync).
+ * Paginates automatically until an empty page is returned.
+ *
+ * @param ctx      - BuildOps API context
+ * @param since    - Unix ms watermark; pass 0 to fetch all jobs
+ * @param page     - Starting page index (default 0)
+ * @param pageSize - Items per page (default 200)
+ * @returns All BuildOpsJobResponse records updated after the watermark
+ */
+export async function listJobsSince(
+  ctx: BuildOpsContext,
+  since: number,
+  page = 0,
+  pageSize = 200,
+): Promise<BuildOpsJobResponse[]> {
+  const all: BuildOpsJobResponse[] = [];
+  let currentPage = page;
+
+  while (true) {
+    const qs = new URLSearchParams({
+      page: String(currentPage),
+      page_size: String(pageSize),
+      ...(since > 0 ? { lastUpdatedDateStart: new Date(since).toISOString() } : {}),
+    });
+    const data = await request<{ totalCount?: number; items?: BuildOpsJobResponse[] }>(
+      ctx, 'GET', `/v1/jobs?${qs}`,
+    );
+    const items = data.items ?? [];
+    all.push(...items);
+    if (items.length < pageSize) break;
+    currentPage++;
+  }
+
+  return all;
+}
+
 // ── Paginated customer list (used by cron, not mid-call) ──────────────────────
 
+/**
+ * Fetches all customers for the tenant (paginated, 200/page). Used by the cron sync.
+ * Not called mid-call — all customer data is read from the local Supabase mirror.
+ *
+ * @param ctx - BuildOps API context
+ * @returns All customer records as raw API objects
+ */
 export async function getAllCustomers(ctx: BuildOpsContext): Promise<unknown[]> {
   const results: unknown[] = [];
   let page = 1;

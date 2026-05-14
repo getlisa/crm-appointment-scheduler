@@ -1,8 +1,17 @@
+/**
+ * Retell function handler: prepare_job.
+ * The central job-creation handler. Validates the account status live (blocking
+ * on creditHold/inactive/suspended/collections), then creates the job in BuildOps
+ * and writes it to buildops_jobs — all during the call before returning to Retell.
+ */
+
 import { createJob, createTask, getCustomer } from '../client.js';
 import { getCustomerById } from '../db/customers.js';
 import { getPropertyById } from '../db/properties.js';
-import { setJobCreated, appendPendingJob } from '../db/inbound-calls.js';
+import { setJobCreated } from '../db/inbound-calls.js';
+import { resolveByTenantId } from '../db/tenants.js';
 import { upsertJob } from '../db/jobs.js';
+import { env } from '../../../config/env.js';
 import type {
   BuildOpsContext,
   InboundCallRow,
@@ -16,7 +25,7 @@ import type {
 const DEFAULT_JOB_TYPE_ID = '04df1a40-16b1-43f4-aa9b-8eafcec812ad';
 const DEFAULT_DEPARTMENT_ID = 'd87c1a38-4acd-459f-9b3f-446a810fae10'; // D2 Service Calls (T&M)
 
-const ALLOWED_STATUSES: JobStatus[] = ['Open', 'In Progress', 'On Hold', 'Cancelled'];
+const ALLOWED_STATUSES: JobStatus[] = ['Open', 'In Progress', 'On Hold', 'Canceled', 'Complete'];
 
 const BLOCKED_STATUSES = new Set(['creditHold', 'inactive', 'suspended', 'collections']);
 
@@ -27,8 +36,26 @@ const BLOCK_REASON: Record<string, string> = {
   collections: 'This account is in collections. Please contact our billing team before scheduling.',
 };
 
-// ── Internal: called post-call by call_ended handler ─────────────────────────
+function buildCtx(resolution: { access_token: string; buildops_tenant_id: string }): BuildOpsContext {
+  return {
+    accessToken: resolution.access_token,
+    buildopsTenantId: resolution.buildops_tenant_id,
+    apiUrl: env.buildopsApiUrl,
+  };
+}
 
+// ── Internal: create job in BuildOps + write to local DB ──────────────────────
+
+/**
+ * Creates a job in BuildOps, writes it to buildops_jobs, and creates all task line items.
+ * Called by handlePrepareJob after all pre-checks pass.
+ *
+ * @param session - Current call session (matchedCustomerId must be set)
+ * @param ctx     - BuildOps API context (access token + tenant ID + base URL)
+ * @param data    - Fully resolved job data including priceBookId, tasks, and department
+ * @returns BuildOps job UUID and human-readable job number
+ * @throws If the BuildOps API call fails
+ */
 export async function executeJobCreation(
   session: InboundCallRow,
   ctx: BuildOpsContext,
@@ -67,8 +94,19 @@ export async function executeJobCreation(
   return jobResult;
 }
 
-// ── Retell-facing: collect + validate job details, store as pending ───────────
+// ── Retell-facing: validate + immediately create job ──────────────────────────
 
+/**
+ * Handles the prepare_job Retell function call.
+ * Runs pre-checks (customer confirmed, property valid, account not blocked), then
+ * delegates to executeJobCreation. Returns a blocked message if the account status
+ * is creditHold, inactive, suspended, or collections.
+ *
+ * @param session - Current call session
+ * @param ctx     - BuildOps API context
+ * @param args    - Function arguments: customer_property_id (required), status, needs_review, tasks
+ * @returns RetellFunctionResult — status: created (with job_id/job_number) | blocked (with message)
+ */
 export async function handlePrepareJob(
   session: InboundCallRow,
   ctx: BuildOpsContext,
@@ -145,23 +183,43 @@ export async function handlePrepareJob(
     tasks,
   };
 
-  await appendPendingJob(session.retellCallId, pendingJob);
+  // Resolve a fresh context if the passed ctx may have a stale token
+  let activeCtx = ctx;
+  const freshResolution = await resolveByTenantId(session.tenantId).catch(() => null);
+  if (freshResolution) activeCtx = buildCtx(freshResolution);
 
-  return {
-    result: JSON.stringify({
-      status: 'ready',
-      needs_review: needsReview,
-      summary: {
-        property_address: property.address,
-        job_status: status,
-        task_count: tasks.length,
-      },
-    }),
-  };
+  try {
+    const jobResult = await executeJobCreation(session, activeCtx, pendingJob);
+    return {
+      result: JSON.stringify({
+        status: 'created',
+        job_id: jobResult.jobId,
+        job_number: jobResult.jobNumber,
+        needs_review: needsReview,
+        summary: {
+          property_address: property.address,
+          job_status: status,
+          task_count: tasks.length,
+        },
+      }),
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { result: `error: job creation failed — ${msg}` };
+  }
 }
 
 // ── Keep add_task_to_job for any direct task operations (admin/testing) ───────
 
+/**
+ * Adds a task line item to an existing BuildOps job.
+ * Primarily used for admin/testing — during normal calls tasks are passed to prepare_job.
+ *
+ * @param _session - Call session (unused but required by the function dispatch signature)
+ * @param ctx      - BuildOps API context
+ * @param args     - Must include job_id, name, and entries array
+ * @returns RetellFunctionResult — status: task_added | error
+ */
 export async function handleAddTaskToJob(
   _session: InboundCallRow,
   ctx: BuildOpsContext,

@@ -1,3 +1,14 @@
+/**
+ * BuildOps full data sync script.
+ * Fetches all customers, properties, and representatives from the BuildOps API,
+ * aggregates phone numbers from all three sources into a single all_numbers array
+ * per customer, and writes the result to scripts/buildops/output/customers.csv.
+ * Also saves a sync_state.json with the highest lastUpdatedDateTime watermark.
+ *
+ * Run this script once before using the incremental sync.
+ * Required env vars: CLIENT_ID, CLIENT_SECRET, TENANT_ID
+ */
+
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';

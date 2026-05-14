@@ -1,3 +1,9 @@
+/**
+ * Shared utilities for the BuildOps CSV-based sync scripts (full-sync.ts and incremental-sync.ts).
+ * Provides the API base URL, CSV field list, phone normalization, CSV read/write helpers,
+ * and sync state persistence (sync_state.json).
+ */
+
 import fs from 'fs';
 import path from 'path';
 
@@ -60,6 +66,15 @@ export type SyncState = {
 
 const EMPTY_STATE: SyncState = { lastRunAt: null, lastSyncedMs: 0, versions: {}, propertyVersions: {} };
 
+/**
+ * Exchanges BuildOps OAuth credentials for a Bearer access token.
+ *
+ * @param clientId     - BuildOps OAuth client ID
+ * @param clientSecret - BuildOps OAuth client secret
+ * @param tenantId     - BuildOps tenant UUID
+ * @returns Bearer access token string
+ * @throws If the auth request fails (non-2xx)
+ */
 export async function getAccessToken(clientId: string, clientSecret: string, tenantId: string): Promise<string> {
   const res = await fetch(`${BASE_URL}/auth/token`, {
     method: 'POST',
@@ -73,12 +88,24 @@ export async function getAccessToken(clientId: string, clientSecret: string, ten
   return ((await res.json()) as { access_token: string }).access_token;
 }
 
+/**
+ * Normalizes a phone string to the last 10 digits. Returns null if fewer than 10 digits remain.
+ *
+ * @param phone - Raw phone string (may include formatting characters)
+ * @returns 10-digit string, or null if invalid
+ */
 export function normalize(phone: string | null | undefined): string | null {
   if (!phone) return null;
   const digits = phone.replace(/\D/g, '').slice(-10);
   return digits.length === 10 ? digits : null;
 }
 
+/**
+ * CSV-escapes a value. Wraps in double-quotes if the value contains commas, quotes, or newlines.
+ *
+ * @param val - Any value (will be coerced to string)
+ * @returns CSV-safe string
+ */
 export function escape(val: unknown): string {
   const str = val == null ? '' : String(val);
   return str.includes(',') || str.includes('"') || str.includes('\n')
@@ -86,10 +113,22 @@ export function escape(val: unknown): string {
     : str;
 }
 
+/**
+ * Serializes a customer object to a CSV row following the CSV_FIELDS column order.
+ *
+ * @param item - Customer record keyed by CSV_FIELDS column names
+ * @returns Comma-delimited string (without trailing newline)
+ */
 export function toCSVRow(item: Record<string, unknown>): string {
   return (CSV_FIELDS as readonly string[]).map(f => escape(item[f])).join(',');
 }
 
+/**
+ * Parses a single CSV line, handling quoted fields with embedded commas and escaped quotes.
+ *
+ * @param line - Raw CSV line string
+ * @returns Array of field value strings
+ */
 export function parseCSVLine(line: string): string[] {
   const fields: string[] = [];
   let i = 0;
@@ -114,6 +153,12 @@ export function parseCSVLine(line: string): string[] {
   return fields;
 }
 
+/**
+ * Reads sync_state.json from the output directory. Returns an empty state if not found or invalid.
+ *
+ * @param dir - Path to the output directory containing sync_state.json
+ * @returns SyncState with lastRunAt, lastSyncedMs, versions, and propertyVersions
+ */
 export function loadSyncState(dir: string): SyncState {
   const p = path.resolve(dir, 'sync_state.json');
   if (!fs.existsSync(p)) return { ...EMPTY_STATE };
@@ -125,10 +170,23 @@ export function loadSyncState(dir: string): SyncState {
   }
 }
 
+/**
+ * Writes sync_state.json to the output directory with the latest run timestamp and watermark.
+ *
+ * @param dir   - Path to the output directory
+ * @param state - SyncState to persist
+ */
 export function saveSyncState(dir: string, state: SyncState): void {
   fs.writeFileSync(path.resolve(dir, 'sync_state.json'), JSON.stringify(state, null, 2), 'utf-8');
 }
 
+/**
+ * Reads the existing customers.csv and returns a Map keyed by BuildOps customer ID.
+ * Returns an empty Map if the file does not exist or has no data rows.
+ *
+ * @param dir - Path to the directory containing customers.csv
+ * @returns Map of BuildOps customer ID → CSV row object
+ */
 export function loadExistingRows(dir: string): Map<string, Record<string, unknown>> {
   const csvPath = path.resolve(dir, 'customers.csv');
   if (!fs.existsSync(csvPath)) return new Map();

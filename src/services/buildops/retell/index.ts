@@ -1,3 +1,11 @@
+/**
+ * Express router for the BuildOps Retell webhook endpoint (POST /api/buildops/retell/webhook).
+ * Handles three event types:
+ *   call_inbound / call_started — resolves tenant, runs phone lookup, sets dynamic variables
+ *   call_ended                  — marks the call session as ended
+ *   tool_call / agent_function  — delegates to handleFunctionCall in src/lib/retell.ts
+ */
+
 import { Router } from 'express';
 import { env } from '../../../config/env.js';
 import { resolveByInboundNumber } from '../db/tenants.js';
@@ -11,7 +19,6 @@ import {
 } from '../db/inbound-calls.js';
 import { normalizePhoneLast10 } from '../fuzzy-search.js';
 import { handleFunctionCall } from '../../../lib/retell.js';
-import { executeJobCreation } from '../handlers/job.js';
 import type { RetellWebhookBody } from '../types.js';
 
 const retellRouter = Router();
@@ -45,7 +52,6 @@ retellRouter.post('/webhook', async (req, res) => {
         retellCallId: callId,
         tenantId: resolution.buildops_tenant_id,
         caller: fromNumber,
-        receiver: toNumber,
       });
 
       const phoneLast10 = normalizePhoneLast10(fromNumber);
@@ -112,26 +118,10 @@ retellRouter.post('/webhook', async (req, res) => {
       return;
     }
 
-    // ── Call ended: execute any pending jobs + tasks ───────────────────────────
+    // ── Call ended ────────────────────────────────────────────────────────────
     if (event === 'call_ended') {
       const callId = body.call?.call_id;
       if (callId) {
-        const session = await getInboundCall(callId).catch(() => null);
-
-        if (session && session.pendingJobs.length > 0 && !session.buildopsJobId) {
-          const resolution = await resolveByInboundNumber(session.receiver).catch(() => null);
-          if (resolution) {
-            const ctx = buildContext(resolution);
-            for (const pendingJob of session.pendingJobs) {
-              try {
-                await executeJobCreation(session, ctx, pendingJob);
-              } catch (err) {
-                console.error('[retell] post-call job creation failed:', err);
-              }
-            }
-          }
-        }
-
         await setCallStatus(callId, 'ended').catch(() => undefined);
       }
       res.json({ ok: true });

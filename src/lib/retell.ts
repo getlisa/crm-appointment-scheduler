@@ -1,5 +1,12 @@
+/**
+ * Retell webhook dispatcher for BuildOps function calls.
+ * Receives tool_call / agent_function events, retrieves the active call session,
+ * resolves fresh tenant credentials, and routes to the appropriate handler by function name.
+ * Also handles call_started and call_ended lifecycle events.
+ */
+
 import { env } from '../config/env.js';
-import { resolveByInboundNumber } from '../services/buildops/db/tenants.js';
+import { resolveByInboundNumber, resolveByTenantId } from '../services/buildops/db/tenants.js';
 import {
   createInboundCall,
   getInboundCall,
@@ -53,12 +60,18 @@ async function handleCallStarted(
     retellCallId: callId,
     tenantId: resolution.buildops_tenant_id,
     caller: fromNumber,
-    receiver: toNumber,
   });
 
   return { ok: true };
 }
 
+/**
+ * Dispatches a Retell function/tool call to the appropriate buildops handler.
+ * Looks up the call session by call_id and resolves tenant credentials before dispatching.
+ *
+ * @param body - Raw Retell webhook payload (tool_call or agent_function event)
+ * @returns RetellFunctionResult with a JSON-serialized result string
+ */
 export async function handleFunctionCall(body: RetellWebhookBody): Promise<RetellFunctionResult> {
   const callId = body.call.call_id;
   const functionName = body.name ?? '';
@@ -69,7 +82,7 @@ export async function handleFunctionCall(body: RetellWebhookBody): Promise<Retel
     return { result: 'error: session not found — call may not have been initialized' };
   }
 
-  const resolution = await resolveByInboundNumber(session.receiver);
+  const resolution = await resolveByTenantId(session.tenantId);
   if (!resolution) {
     return { result: 'error: tenant configuration not found' };
   }
@@ -111,6 +124,13 @@ export async function handleFunctionCall(body: RetellWebhookBody): Promise<Retel
   }
 }
 
+/**
+ * Top-level webhook handler. Routes call lifecycle events and function calls.
+ * Used by server routes that don't go through the retell/index.ts Express router.
+ *
+ * @param rawBody - Raw request body parsed from the Retell webhook
+ * @returns Function result or {ok, message} for lifecycle events
+ */
 export async function handleRetellWebhook(
   rawBody: unknown,
 ): Promise<RetellFunctionResult | { ok: boolean; message?: string }> {

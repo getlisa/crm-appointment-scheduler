@@ -1,3 +1,9 @@
+/**
+ * Supabase queries for the buildops_customers table.
+ * Customers are the primary lookup entity for inbound calls. The all_numbers GIN
+ * array enables O(1) phone lookup across customer, rep, and property phones.
+ */
+
 import { supabaseAdmin as supabase } from '../../../lib/supabase.js';
 import type { CustomerRow, FuzzyQuery, AddressObj } from '../types.js';
 
@@ -18,6 +24,15 @@ function mapRow(row: Record<string, unknown>): CustomerRow {
   };
 }
 
+/**
+ * Looks up active customers whose all_numbers array contains the given phone.
+ * Uses the GIN index for O(1) array-contains lookup. Falls back to normalized
+ * primary/secondary phone columns if all_numbers is not yet populated.
+ *
+ * @param tenantId    - BuildOps tenant UUID to scope the query
+ * @param phoneLast10 - Normalized 10-digit phone number
+ * @returns Matching CustomerRow array (0, 1, or multiple)
+ */
 export async function findCustomersByPhone(
   tenantId: string,
   phoneLast10: string,
@@ -46,6 +61,16 @@ export async function findCustomersByPhone(
   return (fallback as Record<string, unknown>[]).map(mapRow);
 }
 
+/**
+ * Appends a new phone number and source tag to the customer's all_numbers array.
+ * No-ops if the normalized phone is already present. Ensures future calls from
+ * this number are identified via the GIN phone lookup without waiting for a sync.
+ *
+ * @param tenantId   - BuildOps tenant UUID
+ * @param customerId - Our buildops_customers.id (UUID)
+ * @param phone      - Raw phone string (will be normalized to last 10 digits)
+ * @param source     - Source tag, e.g. `rep:cellPhone:John Smith`
+ */
 export async function appendToCustomerAllNumbers(
   tenantId: string,
   customerId: string,
@@ -77,6 +102,16 @@ export async function appendToCustomerAllNumbers(
     .eq('id', customerId);
 }
 
+/**
+ * Returns a deduplicated set of customer candidates for fuzzy matching.
+ * Runs two sub-queries: one by name/zip against buildops_customers, one by
+ * address keyword against buildops_properties (joining back to the owning customer).
+ * Property addresses are hydrated onto matching customers as `propertyAddresses`.
+ *
+ * @param tenantId - BuildOps tenant UUID
+ * @param query    - FuzzyQuery with at least one of: name, zip, address, propertyAddress
+ * @returns Up to 200 CustomerRow candidates (deduped by customer ID)
+ */
 export async function getFuzzyCandidates(
   tenantId: string,
   query: FuzzyQuery,
@@ -171,6 +206,13 @@ export async function getFuzzyCandidates(
   return [...customerMap.values()];
 }
 
+/**
+ * Fetches a single customer by our internal UUID, scoped to the tenant.
+ *
+ * @param tenantId   - BuildOps tenant UUID
+ * @param customerId - Our buildops_customers.id (UUID)
+ * @returns The CustomerRow, or null if not found
+ */
 export async function getCustomerById(
   tenantId: string,
   customerId: string,
