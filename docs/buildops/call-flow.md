@@ -1,8 +1,9 @@
 # BuildOps Integration — Call Flow & Retell Custom Functions
 
-Webhook endpoint: `POST /api/buildops/retell/webhook`  
+Lifecycle webhook: `POST /api/buildops/retell/webhook`  
+Custom function endpoints: `POST /api/buildops/fn/<function_name>`  
 Auth: `x-retell-signature: <Retell HMAC>`  
-Implementation: [`src/services/buildops/retell/index.ts`](../../src/services/buildops/retell/index.ts), [`src/lib/retell.ts`](../../src/lib/retell.ts)
+Implementation: [`src/routes/buildops.ts`](../../src/routes/buildops.ts)
 
 ---
 
@@ -32,22 +33,17 @@ When `found` and `property_count = 1`: `property_id` is populated so the agent c
 
 ---
 
-### 2. Tool Calls During the Call (`tool_call` / `agent_function`)
+### 2. Custom Function Calls During the Call
 
-Retell dispatches function calls to the same webhook endpoint. The dispatcher (`src/lib/retell.ts` → `handleFunctionCall`) looks up the active call session, resolves tenant credentials, then routes by `name`:
+Each Retell custom function has its own dedicated endpoint under `/api/buildops/fn/`. Retell calls the endpoint directly; no dispatcher — the endpoint resolves the call session, looks up tenant credentials, and delegates to the handler in `src/services/buildops/handlers/`.
 
-| Function name | Handler | Purpose |
-|---|---|---|
-| `lookup_customer_by_phone` | `handleLookupByPhone` | Explicit re-run of phone lookup during call |
-| `lookup_customer_fuzzy` | `handleLookupFuzzy` | Name/address/zip fuzzy search |
-| `confirm_customer` | `handleConfirmCustomer` | Confirm which candidate from `multiple_matches` |
-| `get_properties_for_customer` | `handleGetProperties` | List all properties for confirmed customer |
-| `match_property` | `handleMatchProperty` | Fuzzy-match spoken address to a property |
-| `prepare_job` | `handlePrepareJob` | Validate + create job in BuildOps (during the call) |
-| `save_caller_number` | `handleSaveCallerNumber` | Save new phone number as a representative |
-| `add_representative` | `add_representative` | Create new named contact on the account |
-| `transfer_call` | `handleTransferCall` | Mark call as `handed_off` + signal transfer |
-| `add_task_to_job` | `handleAddTaskToJob` | Add a task to an existing job (admin/testing) |
+| Function name | Endpoint | Handler | Purpose |
+|---|---|---|---|
+| `lookup_customer_fuzzy` | `POST /api/buildops/fn/lookup_customer_fuzzy` | `handleLookupFuzzy` | Name/address/zip fuzzy search |
+| `confirm_customer` | `POST /api/buildops/fn/confirm_customer` | `handleConfirmCustomer` | Confirm which candidate from `multiple_matches` |
+| `match_property` | `POST /api/buildops/fn/match_property` | `handleMatchProperty` | Fuzzy-match spoken address to a property |
+| `prepare_job` | `POST /api/buildops/fn/prepare_job` | `handlePrepareJob` | Validate + create job in BuildOps (during the call) |
+| `add_representative` | `POST /api/buildops/fn/add_representative` | `handleAddRepresentative` | Create new named contact on the account |
 
 ---
 
@@ -100,9 +96,9 @@ call_inbound
 
 ---
 
-## Custom Webhook Functions
+## Custom Function Endpoints
 
-All functions share the endpoint `POST /api/buildops/retell/webhook`.
+Each function has its own endpoint (`POST /api/buildops/fn/<name>`). Retell calls the URL directly; the endpoint resolves the call session and delegates to the handler.
 
 ---
 

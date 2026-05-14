@@ -13,8 +13,18 @@ create table if not exists public.buildops_tenants (
   client_id           text        not null,
   client_secret       text        not null,
   access_token        text        not null,
-  buildops_tenant_id  text        not null
+  buildops_tenant_id  text        not null,
+  company_name        text,
+  is_active           boolean     not null default true,
+  business_address    jsonb,
+  billing_address     jsonb
 );
+
+alter table public.buildops_tenants
+  add column if not exists company_name     text,
+  add column if not exists is_active        boolean not null default true,
+  add column if not exists business_address jsonb,
+  add column if not exists billing_address  jsonb;
 
 -- ─────────────────────────────────────────────
 -- buildops_customers
