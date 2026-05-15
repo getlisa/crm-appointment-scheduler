@@ -27,10 +27,25 @@ function mapRow(row: Record<string, unknown>): PropertyRow {
  */
 export async function getPropertiesForCustomer(customerId: string): Promise<PropertyRow[]> {
   const { data, error } = await supabase
-    .from('property')
+    .from('buildops_properties')
     .select('*')
     .eq('customer_id', customerId);
 
+  if (error || !data) return [];
+  return (data as Record<string, unknown>[]).map(mapRow);
+}
+
+/**
+ * Fetches properties by their BuildOps property UUIDs (from customer.propertyIds).
+ * Use this instead of getPropertiesForCustomer — the customer_id FK points to
+ * buildops_customer_id, but callers only have the internal UUID.
+ */
+export async function getPropertiesByIds(ids: string[]): Promise<PropertyRow[]> {
+  if (ids.length === 0) return [];
+  const { data, error } = await supabase
+    .from('buildops_properties')
+    .select('*')
+    .in('id', ids);
   if (error || !data) return [];
   return (data as Record<string, unknown>[]).map(mapRow);
 }
@@ -44,7 +59,7 @@ export async function getPropertiesForCustomer(customerId: string): Promise<Prop
  */
 export async function getPropertyById(propertyId: string): Promise<PropertyRow | null> {
   const { data, error } = await supabase
-    .from('property')
+    .from('buildops_properties')
     .select('*')
     .eq('id', propertyId)
     .single();

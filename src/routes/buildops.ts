@@ -10,8 +10,8 @@ import {
   setMatchedCustomer,
 } from '../services/buildops/db/inbound-calls.js';
 import { findCustomersByPhone } from '../services/buildops/db/customers.js';
-import { getPropertiesForCustomer } from '../services/buildops/db/properties.js';
-import { normalizePhoneLast10 } from '../services/buildops/fuzzy-search.js';
+import { getPropertiesByIds } from '../services/buildops/db/properties.js';
+import { normalizePhoneLast10, pickPrimaryAddress } from '../services/buildops/fuzzy-search.js';
 import { handleLookupFuzzy } from '../services/buildops/handlers/fuzzy-lookup.js';
 import {
   handleConfirmCustomer,
@@ -190,7 +190,8 @@ router.post('/retell/webhook', async (req, res) => {
       if (matches.length === 1) {
         await setMatchedCustomer(callId, matches[0].id);
         const customer = matches[0];
-        const properties = await getPropertiesForCustomer(customer.id);
+        const properties = await getPropertiesByIds(customer.propertyIds);
+        const primary = pickPrimaryAddress(customer, properties);
         res.json({
           call_inbound: {
             override_agent_id: env.retellLlmId ?? undefined,
@@ -202,8 +203,8 @@ router.post('/retell/webhook', async (req, res) => {
               customer_name: customer.name,
               from_number: fromNumber,
               new_number_detected: 'false',
-              address_count: String(customer.addresses?.length ?? 0),
-              addresses: JSON.stringify(customer.addresses ?? []),
+              address: primary.address ?? '',
+              address_source: primary.addressSource ?? '',
               multiple_matches: 'false',
               property_count: String(properties.length),
               property_id: properties.length === 1 ? properties[0].id : '',
@@ -229,7 +230,7 @@ router.post('/retell/webhook', async (req, res) => {
               matches.map(m => ({
                 name: m.name,
                 id: m.id,
-                address: m.addresses?.[0] ?? null,
+                address: m.businessAddress ?? m.billingAddress ?? null,
               })),
             ),
             multiple_matches: 'true',

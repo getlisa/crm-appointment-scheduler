@@ -23,7 +23,7 @@ import type {
 } from '../types.js';
 
 const DEFAULT_JOB_TYPE_ID = '04df1a40-16b1-43f4-aa9b-8eafcec812ad';
-const DEFAULT_DEPARTMENT_ID = 'd87c1a38-4acd-459f-9b3f-446a810fae10'; // D2 Service Calls (T&M)
+const DEFAULT_DEPARTMENT_ID = 'd87c1a38-4acd-459f-9b3f-446a810fae10';
 
 const ALLOWED_STATUSES: JobStatus[] = ['Open', 'In Progress', 'On Hold', 'Canceled', 'Complete'];
 
@@ -71,7 +71,7 @@ export async function executeJobCreation(
     customerId: customer.buildopsCustomerId,
     isUseTaxable: data.isUseTaxable,
     status: data.status,
-    departments: data.departmentId ? [{ id: data.departmentId }] : [],
+    departmentIds: data.departmentId ? [data.departmentId] : null,
   });
 
   await setJobCreated(session.retellCallId, jobResult.jobId);
@@ -154,7 +154,7 @@ export async function handlePrepareJob(
   }
 
   const property = await getPropertyById(customerPropertyId);
-  if (!property || property.customerId !== session.matchedCustomerId) {
+  if (!property || property.customerId !== customer.buildopsCustomerId) {
     return { result: 'error: property not found or does not belong to this customer' };
   }
 
@@ -179,7 +179,7 @@ export async function handlePrepareJob(
     status,
     propertyAddress: property.address,
     needsReview,
-    departmentId: DEFAULT_DEPARTMENT_ID || null,
+    departmentId: DEFAULT_DEPARTMENT_ID,
     tasks,
   };
 

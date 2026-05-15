@@ -6,43 +6,33 @@
  */
 
 import { getCustomerById } from '../db/customers.js';
-import { getPropertiesForCustomer } from '../db/properties.js';
+import { getPropertiesByIds } from '../db/properties.js';
 import { setMatchedCustomer, setCallStatus } from '../db/inbound-calls.js';
 
-import { tokenSetRatio, normalizeAddress } from '../fuzzy-search.js';
+import { tokenSetRatio, normalizeAddress, pickPrimaryAddress } from '../fuzzy-search.js';
 import type { InboundCallRow, PropertyRow, RetellFunctionResult } from '../types.js';
 
-/**
- * Confirms the customer selected by the caller from a multiple_matches list.
- * Writes matchedCustomerId to the call session and returns customer data + property count.
- *
- * @param session - Current call session
- * @param args    - Must include candidate_id (our buildops_customers.id UUID)
- * @returns RetellFunctionResult — status: confirmed, with customer info and property_count
- */
 export async function handleConfirmCustomer(
   session: InboundCallRow,
   args: Record<string, unknown>,
 ): Promise<RetellFunctionResult> {
   const candidateId = args.candidate_id as string | undefined;
-  if (!candidateId) {
-    return { result: 'error: candidate_id is required' };
-  }
+  if (!candidateId) return { result: 'error: candidate_id is required' };
 
   const customer = await getCustomerById(session.tenantId, candidateId);
-  if (!customer) {
-    return { result: 'error: customer not found for this tenant' };
-  }
+  if (!customer) return { result: 'error: customer not found for this tenant' };
 
   await setMatchedCustomer(session.retellCallId, customer.id);
-  const properties = await getPropertiesForCustomer(customer.id);
+  const properties = await getPropertiesByIds(customer.propertyIds);
+  const primary = pickPrimaryAddress(customer, properties);
   return {
     result: JSON.stringify({
       status: 'confirmed',
       customer: {
         id: customer.id,
         name: customer.name,
-        address: customer.addresses?.[0] ?? null,
+        address: primary.address,
+        addressSource: primary.addressSource,
       },
       property_count: properties.length,
       ...(properties.length === 1 ? { property_id: properties[0].id } : {}),
@@ -50,13 +40,6 @@ export async function handleConfirmCustomer(
   };
 }
 
-/**
- * Returns all service location properties for the confirmed customer.
- * Used when the agent needs to present a list of addresses to the caller.
- *
- * @param session - Current call session (matchedCustomerId must be set)
- * @returns RetellFunctionResult — status: ok with properties array, or no_properties
- */
 export async function handleGetProperties(
   session: InboundCallRow,
 ): Promise<RetellFunctionResult> {
@@ -64,8 +47,10 @@ export async function handleGetProperties(
     return { result: 'error: no customer confirmed yet — call confirm_customer first' };
   }
 
-  const properties = await getPropertiesForCustomer(session.matchedCustomerId);
+  const customer = await getCustomerById(session.tenantId, session.matchedCustomerId);
+  if (!customer) return { result: 'error: customer session invalid' };
 
+  const properties = await getPropertiesByIds(customer.propertyIds);
   if (properties.length === 0) {
     return {
       result: JSON.stringify({
@@ -78,7 +63,7 @@ export async function handleGetProperties(
   return {
     result: JSON.stringify({
       status: 'ok',
-      properties: properties.map(p => ({
+      properties: properties.map((p: PropertyRow) => ({
         id: p.id,
         name: p.name,
         address: p.address,
@@ -102,15 +87,6 @@ function scoreProperty(spoken: string, prop: PropertyRow): number {
   return Math.min(line1Score + cityBonus + zipBonus, 1);
 }
 
-/**
- * Fuzzy-matches a spoken address against the confirmed customer's properties.
- * Scores using token-set ratio on normalized address line 1, with bonuses for
- * matching city and zip. Returns the property UUID needed for prepare_job.
- *
- * @param session - Current call session (matchedCustomerId must be set)
- * @param args    - Must include spoken_address (caller's spoken service location)
- * @returns RetellFunctionResult — status: matched (with property_id) | ambiguous | not_found
- */
 export async function handleMatchProperty(
   session: InboundCallRow,
   args: Record<string, unknown>,
@@ -120,18 +96,19 @@ export async function handleMatchProperty(
   }
 
   const spokenAddress = (args.spoken_address as string | undefined)?.trim();
-  if (!spokenAddress) {
-    return { result: 'error: spoken_address is required' };
-  }
+  if (!spokenAddress) return { result: 'error: spoken_address is required' };
 
-  const properties = await getPropertiesForCustomer(session.matchedCustomerId);
+  const customer = await getCustomerById(session.tenantId, session.matchedCustomerId);
+  if (!customer) return { result: 'error: customer session invalid' };
+
+  const properties = await getPropertiesByIds(customer.propertyIds);
   if (properties.length === 0) {
     return { result: JSON.stringify({ status: 'no_properties' }) };
   }
 
   const scored = properties
     .map((p: PropertyRow) => ({ property: p, score: scoreProperty(spokenAddress, p) }))
-    .sort((a, b) => b.score - a.score);
+    .sort((a: { score: number }, b: { score: number }) => b.score - a.score);
 
   const best   = scored[0];
   const second = scored[1];
@@ -151,7 +128,10 @@ export async function handleMatchProperty(
     return {
       result: JSON.stringify({
         status: 'ambiguous',
-        candidates: scored.slice(0, 3).map(s => ({ id: s.property.id, address: s.property.address })),
+        candidates: scored.slice(0, 3).map((s: { property: PropertyRow }) => ({
+          id: s.property.id,
+          address: s.property.address,
+        })),
       }),
     };
   }
