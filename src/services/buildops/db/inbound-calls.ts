@@ -101,6 +101,41 @@ export async function setJobCreated(
 }
 
 /**
+ * Finds the most recent active session for a caller+tenant pair.
+ * Used at call_started to locate the temp-ID session created at call_inbound.
+ */
+export async function findActiveByCallerAndTenant(
+  tenantId: string,
+  caller: string,
+): Promise<InboundCallRow | null> {
+  const { data, error } = await supabase
+    .from('buildops_inbound_calls')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('caller', caller)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (error || !data || (data as unknown[]).length === 0) return null;
+  return mapRow((data as Record<string, unknown>[])[0]);
+}
+
+/**
+ * Replaces a temporary call ID (generated at call_inbound) with the real Retell call ID
+ * received at call_started. All subsequent lookups use the real ID.
+ */
+export async function updateRetellCallId(
+  currentCallId: string,
+  newCallId: string,
+): Promise<void> {
+  await supabase
+    .from('buildops_inbound_calls')
+    .update({ retell_call_id: newCallId })
+    .eq('retell_call_id', currentCallId);
+}
+
+/**
  * Updates the call status.
  * Valid transitions: active → ended (normal), active → handed_off (transferred/low confidence).
  *
