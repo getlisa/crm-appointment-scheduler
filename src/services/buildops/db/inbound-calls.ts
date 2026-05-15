@@ -30,14 +30,14 @@ function mapRow(row: Record<string, unknown>): InboundCallRow {
  */
 export async function createInboundCall(params: {
   retellCallId: string;
-  tenantId: string;
+  tenantId?: string;
   caller?: string;
 }): Promise<InboundCallRow> {
   const { data, error } = await supabase
     .from('buildops_inbound_calls')
     .insert({
       retell_call_id: params.retellCallId,
-      tenant_id: params.tenantId,
+      tenant_id: params.tenantId ?? null,
       caller: params.caller ?? null,
       status: 'active',
     })
