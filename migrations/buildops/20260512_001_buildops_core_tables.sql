@@ -13,8 +13,18 @@ create table if not exists public.buildops_tenants (
   client_id           text        not null,
   client_secret       text        not null,
   access_token        text        not null,
-  buildops_tenant_id  text        not null
+  buildops_tenant_id  text        not null,
+  company_name        text,
+  is_active           boolean     not null default true,
+  business_address    jsonb,
+  billing_address     jsonb
 );
+
+alter table public.buildops_tenants
+  add column if not exists company_name     text,
+  add column if not exists is_active        boolean not null default true,
+  add column if not exists business_address jsonb,
+  add column if not exists billing_address  jsonb;
 
 -- ─────────────────────────────────────────────
 -- buildops_customers
@@ -40,8 +50,8 @@ create table if not exists public.buildops_customers (
   buildops_created_at      bigint,
   all_numbers              text[],
   all_numbers_sources      text[],
-  property_ids             text[]  not null default '{}',      -- BuildOps property UUIDs for this customer
-  representative_ids       uuid[]  not null default '{}',      -- our buildops_representatives.id UUIDs
+  property_ids             text[]  not null default '{}',      -- FK → buildops_properties.id (BuildOps property UUIDs). Stores IDs only; full data lives in buildops_properties.
+  representative_ids       uuid[]  not null default '{}',      -- FK → buildops_representatives.id (our UUIDs). Stores IDs only; full data lives in buildops_representatives.
   billing_address          text,                               -- formatted string from addresses[addressType=billingAddress]
   business_address         text,                               -- formatted string from primary service address
   constraint customers_tenant_buildops_id_key unique (tenant_id, buildops_customer_id),

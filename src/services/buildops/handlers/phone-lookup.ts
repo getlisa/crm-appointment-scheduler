@@ -6,8 +6,9 @@
  */
 
 import { findCustomersByPhone } from '../db/customers.js';
+import { getPropertiesByIds } from '../db/properties.js';
 import { setMatchedCustomer } from '../db/inbound-calls.js';
-import { normalizePhoneLast10 } from '../fuzzy-search.js';
+import { normalizePhoneLast10, pickPrimaryAddress } from '../fuzzy-search.js';
 import type { InboundCallRow, RetellFunctionResult } from '../types.js';
 
 /**
@@ -38,13 +39,16 @@ export async function handleLookupByPhone(
 
   if (matches.length === 1) {
     await setMatchedCustomer(session.retellCallId, matches[0].id);
+    const properties = await getPropertiesByIds(matches[0].propertyIds);
+    const primary = pickPrimaryAddress(matches[0], properties);
     return {
       result: JSON.stringify({
         status: 'matched',
         customer: {
           id: matches[0].id,
           name: matches[0].name,
-          address: matches[0].addresses?.[0] ?? null,
+          address: primary.address,
+          addressSource: primary.addressSource,
         },
       }),
     };
@@ -54,11 +58,10 @@ export async function handleLookupByPhone(
   return {
     result: JSON.stringify({
       status: 'multiple_matches',
-      candidates: matches.slice(0, 4).map(c => ({
-        id: c.id,
-        name: c.name,
-        address: c.addresses?.[0] ?? null,
-      })),
+      candidates: matches.slice(0, 4).map(c => {
+        const primary = pickPrimaryAddress(c);
+        return { id: c.id, name: c.name, address: primary.address, addressSource: primary.addressSource };
+      }),
     }),
   };
 }

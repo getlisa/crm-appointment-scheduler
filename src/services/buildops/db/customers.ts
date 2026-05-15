@@ -16,7 +16,6 @@ function mapRow(row: Record<string, unknown>): CustomerRow {
     phonePrimary: row.phone_primary as string | null,
     phoneSecondary: row.phone_secondary as string | null,
     isActive: row.is_active as boolean,
-    addresses: (row.addresses as AddressObj[]) ?? [],
     normalizedPhonePrimary: row.normalized_phone_primary as string | null,
     normalizedPhoneSecondary: row.normalized_phone_secondary as string | null,
     priceBookId: (row.price_book_id as string | null) ?? null,
@@ -43,7 +42,7 @@ export async function findCustomersByPhone(
 ): Promise<CustomerRow[]> {
   // Primary: all_numbers covers customer + rep + property phones
   const { data: primary } = await supabase
-    .from('customers')
+    .from('buildops_customers')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('is_active', true)
@@ -55,7 +54,7 @@ export async function findCustomersByPhone(
 
   // Fallback: direct normalized columns (when all_numbers not yet populated)
   const { data: fallback } = await supabase
-    .from('customers')
+    .from('buildops_customers')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('is_active', true)
@@ -85,7 +84,7 @@ export async function appendToCustomerAllNumbers(
   if (normalized.length !== 10) return;
 
   const { data } = await supabase
-    .from('customers')
+    .from('buildops_customers')
     .select('all_numbers, all_numbers_sources')
     .eq('tenant_id', tenantId)
     .eq('id', customerId)
@@ -97,7 +96,7 @@ export async function appendToCustomerAllNumbers(
   const currentSources = (data?.all_numbers_sources as string[] | null) ?? [];
 
   await supabase
-    .from('customers')
+    .from('buildops_customers')
     .update({
       all_numbers: [...current, normalized],
       all_numbers_sources: [...currentSources, source],
@@ -127,22 +126,17 @@ export async function getFuzzyCandidates(
   // ── Search customers by name / zip ────────────────────────────────────────
   if (query.name || query.zip) {
     let q = supabase
-      .from('customers')
+      .from('buildops_customers')
       .select('*')
       .eq('tenant_id', tenantId)
       .eq('is_active', true)
       .limit(200);
 
-    if (query.name && query.zip) {
-      q = q.ilike('name', `%${query.name}%`).filter(
-        'addresses',
-        'cs',
-        JSON.stringify([{ zip: query.zip }]),
-      );
-    } else if (query.name) {
+    if (query.name) {
       q = q.ilike('name', `%${query.name}%`);
-    } else if (query.zip) {
-      q = q.filter('addresses', 'cs', JSON.stringify([{ zip: query.zip }]));
+    }
+    if (query.zip) {
+      q = q.ilike('business_address', `%${query.zip}%`);
     }
 
     const { data } = await q;
@@ -159,15 +153,16 @@ export async function getFuzzyCandidates(
   if (spokenAddress) {
     const addressKeyword = spokenAddress.split(' ').slice(0, 4).join(' ');
     const { data: propData } = await supabase
-      .from('property')
+      .from('buildops_properties')
       .select('customer_id, address')
       .ilike('address->>line1', `%${addressKeyword}%`)
       .limit(50);
 
     if (propData && propData.length > 0) {
-      const customerIds = [...new Set((propData as Record<string, unknown>[]).map(r => r['customer_id'] as string))];
+      // buildops_properties.customer_id references buildops_customers.buildops_customer_id
+      const buildopsCustomerIds = [...new Set((propData as Record<string, unknown>[]).map(r => r['customer_id'] as string))];
 
-      // Build property address map: customerId → AddressObj[]
+      // Build property address map: buildopsCustomerId → AddressObj[]
       const propAddressMap = new Map<string, AddressObj[]>();
       for (const r of propData as Record<string, unknown>[]) {
         const cid = r['customer_id'] as string;
@@ -177,15 +172,16 @@ export async function getFuzzyCandidates(
         propAddressMap.set(cid, existing);
       }
 
-      // Fetch any customers not already in the map
-      const missing = customerIds.filter(id => !customerMap.has(id));
+      // Fetch customers not already in the map (join by buildops_customer_id, not id)
+      const alreadyHaveIds = new Set([...customerMap.values()].map(c => c.buildopsCustomerId));
+      const missing = buildopsCustomerIds.filter(id => !alreadyHaveIds.has(id));
       if (missing.length > 0) {
         const { data: custData } = await supabase
-          .from('customers')
+          .from('buildops_customers')
           .select('*')
           .eq('tenant_id', tenantId)
           .eq('is_active', true)
-          .in('id', missing);
+          .in('buildops_customer_id', missing);
 
         if (custData) {
           for (const row of custData as Record<string, unknown>[]) {
@@ -194,14 +190,13 @@ export async function getFuzzyCandidates(
         }
       }
 
-      // Hydrate all matched customers with their property addresses
-      for (const [cid, propAddrs] of propAddressMap) {
-        const customer = customerMap.get(cid);
-        if (customer) {
-          customer.propertyAddresses = [
-            ...(customer.propertyAddresses ?? []),
-            ...propAddrs,
-          ];
+      // Hydrate customers with their property addresses
+      for (const [buildopsCid, propAddrs] of propAddressMap) {
+        for (const customer of customerMap.values()) {
+          if (customer.buildopsCustomerId === buildopsCid) {
+            customer.propertyAddresses = [...(customer.propertyAddresses ?? []), ...propAddrs];
+            break;
+          }
         }
       }
     }
@@ -222,7 +217,7 @@ export async function getCustomerById(
   customerId: string,
 ): Promise<CustomerRow | null> {
   const { data, error } = await supabase
-    .from('customers')
+    .from('buildops_customers')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('id', customerId)

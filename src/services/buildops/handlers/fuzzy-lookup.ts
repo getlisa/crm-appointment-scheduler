@@ -7,12 +7,13 @@
 
 import { getFuzzyCandidates } from '../db/customers.js';
 import { setMatchedCustomer, setCallStatus } from '../db/inbound-calls.js';
-import { getPropertiesForCustomer } from '../db/properties.js';
+import { getPropertiesByIds } from '../db/properties.js';
 import {
   normalizePhoneLast10,
   computeMatchSignals,
   assignTier,
   crossValidate,
+  pickPrimaryAddress,
 } from '../fuzzy-search.js';
 import type { InboundCallRow, FuzzyQuery, RetellFunctionResult } from '../types.js';
 
@@ -119,7 +120,8 @@ export async function handleLookupFuzzy(
   ): Promise<RetellFunctionResult> => {
     await setMatchedCustomer(session.retellCallId, r.customer.id);
     const newNumberDetected = !!callerPhone && !r.customer.allNumbers.includes(callerPhone);
-    const properties = await getPropertiesForCustomer(r.customer.id);
+    const properties = await getPropertiesByIds(r.customer.propertyIds);
+    const primary = pickPrimaryAddress(r.customer, properties);
     return {
       result: JSON.stringify({
         status: 'found',
@@ -129,7 +131,8 @@ export async function handleLookupFuzzy(
         customer_id: r.customer.id,
         customer_name: r.customer.name,
         new_number_detected: newNumberDetected,
-        address: r.customer.addresses?.[0] ?? null,
+        address: primary.address,
+        addressSource: primary.addressSource,
         tier_reason: r.tier.rule,
         property_count: properties.length,
         ...(properties.length === 1 ? { property_id: properties[0].id } : {}),
@@ -167,7 +170,7 @@ export async function handleLookupFuzzy(
         candidates: tier2.slice(0, 3).map(r => ({
           id: r.customer.id,
           name: r.customer.name,
-          address: r.customer.addresses?.[0] ?? null,
+          address: r.customer.businessAddress ?? r.customer.billingAddress ?? null,
           tier_reason: r.tier.rule,
         })),
       }),

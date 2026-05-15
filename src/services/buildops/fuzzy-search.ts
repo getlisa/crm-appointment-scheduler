@@ -7,7 +7,7 @@
  * assignTier() + crossValidate() for confidence tier determination.
  */
 
-import type { CustomerRow, FuzzyQuery, ScoredCandidate, LookupDecision } from './types.js';
+import type { CustomerRow, PropertyRow, FuzzyQuery, ScoredCandidate, LookupDecision } from './types.js';
 
 // ── Jaro-Winkler ──────────────────────────────────────────────────────────────
 
@@ -179,24 +179,22 @@ function scoreCandidate(query: FuzzyQuery, customer: CustomerRow): number {
     score += jaroWinkler(queryFirst, customerFirst) * W_FIRST_NAME;
   }
 
-  // Score against all known addresses: customer billing addresses + property addresses
-  const allAddresses = [
-    ...(customer.addresses ?? []),
-    ...(customer.propertyAddresses ?? []),
-  ];
+  // Score against business address, billing address, and property addresses
+  const propertyAddresses = customer.propertyAddresses ?? [];
   const spokenAddress = query.address ?? query.propertyAddress;
 
-  if (spokenAddress && allAddresses.length > 0) {
+  if (spokenAddress) {
     const normalizedSpoken = normalizeAddress(spokenAddress);
-    const bestAddrScore = Math.max(
-      ...allAddresses
-        .filter(a => a.line1)
-        .map(a => tokenSetRatio(normalizedSpoken, normalizeAddress(a.line1!))),
-    );
+    const addrScores: number[] = [
+      ...(customer.businessAddress ? [tokenSetRatio(normalizedSpoken, normalizeAddress(customer.businessAddress))] : []),
+      ...(customer.billingAddress ? [tokenSetRatio(normalizedSpoken, normalizeAddress(customer.billingAddress))] : []),
+      ...propertyAddresses.filter(a => a.line1).map(a => tokenSetRatio(normalizedSpoken, normalizeAddress(a.line1!))),
+    ];
+    const bestAddrScore = addrScores.length > 0 ? Math.max(...addrScores) : 0;
     if (bestAddrScore > 0) score += bestAddrScore * W_ADDRESS;
 
-    // City bonus from best matching address
-    for (const a of allAddresses) {
+    // City bonus from property addresses (structured fields)
+    for (const a of propertyAddresses) {
       if (a.city) {
         const qCity = normalizeName(spokenAddress.split(',').pop()?.trim() ?? '');
         const cCity = normalizeName(a.city);
@@ -205,9 +203,9 @@ function scoreCandidate(query: FuzzyQuery, customer: CustomerRow): number {
     }
   }
 
-  const addr = allAddresses[0];
-  if (query.zip && addr?.zip) {
-    score += (query.zip.slice(0, 5) === addr.zip.slice(0, 5) ? 1 : 0) * W_ZIP;
+  const firstPropAddr = propertyAddresses[0];
+  if (query.zip && firstPropAddr?.zip) {
+    score += (query.zip.slice(0, 5) === firstPropAddr.zip.slice(0, 5) ? 1 : 0) * W_ZIP;
   }
 
   if (query.oldPhone) {
@@ -406,9 +404,8 @@ export function computeMatchSignals(
   const nameMismatch  = !nameMatchStrong && !nameMatchWeak && queryHasFullName && nameFuzzy < 0.65;
 
   const addrStrings: string[] = [
-    ...(candidate.addresses ?? [])
-      .filter(a => a.line1)
-      .map(a => [a.line1, a.city, a.state, a.zip].filter(Boolean).join(' ')),
+    ...(candidate.businessAddress ? [candidate.businessAddress] : []),
+    ...(candidate.billingAddress ? [candidate.billingAddress] : []),
     ...(candidate.propertyAddresses ?? [])
       .filter(a => a.line1)
       .map(a => [a.line1, a.city, a.state, a.zip].filter(Boolean).join(' ')),
@@ -552,4 +549,32 @@ export function crossValidate(
   }
 
   return { pass: true };
+}
+
+// ── Primary address picker ────────────────────────────────────────────────────
+// Priority: businessAddress → first property with a line1 → billingAddress
+
+export type AddressSource = 'businessAddress' | 'propertyAddress' | 'billingAddress';
+
+export function pickPrimaryAddress(
+  customer: CustomerRow,
+  properties?: PropertyRow[],
+): { address: string | null; addressSource: AddressSource | null } {
+  if (customer.businessAddress) {
+    return { address: customer.businessAddress, addressSource: 'businessAddress' };
+  }
+  if (properties && properties.length > 0) {
+    const prop = properties.find(p => p.address?.line1);
+    if (prop) {
+      const a = prop.address;
+      return {
+        address: [a.line1, a.city, a.state, a.zip].filter(Boolean).join(', '),
+        addressSource: 'propertyAddress',
+      };
+    }
+  }
+  if (customer.billingAddress) {
+    return { address: customer.billingAddress, addressSource: 'billingAddress' };
+  }
+  return { address: null, addressSource: null };
 }

@@ -34,13 +34,14 @@ export interface CustomerRow {
   phonePrimary: string | null;
   phoneSecondary: string | null;
   isActive: boolean;
-  addresses: AddressObj[];
   propertyAddresses?: AddressObj[];
   normalizedPhonePrimary: string | null;
   normalizedPhoneSecondary: string | null;
   priceBookId: string | null;
   allNumbers: string[];
+  /** FK → buildops_properties.id. IDs only — use getPropertiesByIds() to load full data. */
   propertyIds: string[];
+  /** FK → buildops_representatives.id. IDs only — use a representatives lookup to load full data. */
   representativeIds: string[];
   billingAddress: string | null;
   businessAddress: string | null;
@@ -201,7 +202,7 @@ export interface CreateJobInput {
   customerId: string;
   isUseTaxable: boolean;
   status: JobStatus;
-  departments?: { id: string }[];
+  departmentIds?: string[] | null;
 }
 
 export interface TaskEntry {
