@@ -64,12 +64,8 @@ async function resolveSession(callId: string) {
 // ── Admin: register / update a tenant ────────────────────────────────────────
 
 const TenantUpsertSchema = z.object({
+  no: z.string().regex(/^\+[1-9]\d{1,14}$/, 'Must be E.164 format, e.g. +15551234567'),
   buildops_tenant_id: z.string().min(1),
-  company_name: z.string().min(1),
-  e164_no: z.string().regex(/^\+[1-9]\d{1,14}$/, 'Must be E.164 format, e.g. +15551234567'),
-  is_active: z.boolean().optional().default(true),
-  business_address: z.record(z.unknown()).optional(),
-  billing_address: z.record(z.unknown()).optional(),
   client_id: z.string().min(1),
   client_secret: z.string().min(1),
   access_token: z.string().min(1),
@@ -84,27 +80,25 @@ router.post('/admin/tenant', async (req, res) => {
 
   const d = parsed.data;
 
-  const { error } = await supabase.from('buildops_tenants').upsert(
-    {
-      no: d.e164_no,
-      buildops_tenant_id: d.buildops_tenant_id,
-      company_name: d.company_name,
-      is_active: d.is_active,
-      business_address: d.business_address ?? null,
-      billing_address: d.billing_address ?? null,
-      client_id: d.client_id,
-      client_secret: d.client_secret,
-      access_token: d.access_token,
-    },
-    { onConflict: 'no' },
-  );
+  const { error } = await supabase
+    .from('buildops_tenants')
+    .upsert(
+      {
+        no: d.no,
+        buildops_tenant_id: d.buildops_tenant_id,
+        client_id: d.client_id,
+        client_secret: d.client_secret,
+        access_token: d.access_token,
+      },
+      { onConflict: 'no' },
+    );
 
   if (error) {
     res.status(500).json({ error: error.message });
     return;
   }
 
-  res.json({ ok: true, buildops_tenant_id: d.buildops_tenant_id });
+  res.json({ ok: true, no: d.no, buildops_tenant_id: d.buildops_tenant_id });
 });
 
 // ── Admin: list tenants (no secrets) ─────────────────────────────────────────
@@ -112,10 +106,11 @@ router.post('/admin/tenant', async (req, res) => {
 router.get('/admin/tenants', async (_req, res) => {
   const { data, error } = await supabase
     .from('buildops_tenants')
-    .select('no, buildops_tenant_id, company_name, is_active')
-    .order('company_name');
+    .select('no, buildops_tenant_id')
+    .order('no');
 
   if (error) {
+    console.error('error:', error);
     res.status(500).json({ error: error.message });
     return;
   }
