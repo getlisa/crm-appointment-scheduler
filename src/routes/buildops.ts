@@ -153,6 +153,7 @@ router.post('/retell/webhook', async (req, res) => {
     const body = req.body as {
       event?: string;
       call?: { call_id?: string; to_number?: string; from_number?: string };
+      call_inbound?: { from_number?: string; to_number?: string; agent_id?: string };
     };
     const event = body?.event ?? '';
 
@@ -178,23 +179,23 @@ router.post('/retell/webhook', async (req, res) => {
     }
 
     if (event === 'call_inbound') {
-      console.log('[buildops] call_inbound raw body:', JSON.stringify(req.body));
-      const toNumber = body.call?.to_number ?? '';
-      const fromNumber = body.call?.from_number ?? '';
+      const toNumber = body.call_inbound?.to_number ?? '';
+      const fromNumber = body.call_inbound?.from_number ?? '';
       const callId = body.call?.call_id || crypto.randomUUID();
 
       const resolution = await resolveByInboundNumber(toNumber);
+
+      await createInboundCall({
+        retellCallId: callId,
+        tenantId: resolution?.buildops_tenant_id,
+        caller: fromNumber,
+      });
+
       if (!resolution) {
         console.error(`[buildops] unknown inbound number: ${toNumber}`);
         res.json(buildInboundResponse('error', fromNumber));
         return;
       }
-
-      await createInboundCall({
-        retellCallId: callId,
-        tenantId: resolution.buildops_tenant_id,
-        caller: fromNumber,
-      });
 
       const phoneLast10 = normalizePhoneLast10(fromNumber);
       const matches = phoneLast10
