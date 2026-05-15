@@ -5,9 +5,11 @@ import { env } from '../config/env.js';
 import { resolveByInboundNumber, resolveByTenantId } from '../services/buildops/db/tenants.js';
 import {
   createInboundCall,
+  findActiveByCallerAndTenant,
   getInboundCall,
   setCallStatus,
   setMatchedCustomer,
+  updateRetellCallId,
 } from '../services/buildops/db/inbound-calls.js';
 import { findCustomersByPhone } from '../services/buildops/db/customers.js';
 import { getPropertiesByIds } from '../services/buildops/db/properties.js';
@@ -154,10 +156,32 @@ router.post('/retell/webhook', async (req, res) => {
     };
     const event = body?.event ?? '';
 
-    if (event === 'call_inbound' || event === 'call_started') {
+    if (event === 'call_started') {
       const callId = body.call?.call_id ?? '';
       const toNumber = body.call?.to_number ?? '';
       const fromNumber = body.call?.from_number ?? '';
+
+      if (callId && fromNumber && toNumber) {
+        const resolution = await resolveByInboundNumber(toNumber);
+        if (resolution) {
+          const session = await findActiveByCallerAndTenant(
+            resolution.buildops_tenant_id,
+            fromNumber,
+          );
+          if (session && session.retellCallId !== callId) {
+            await updateRetellCallId(session.retellCallId, callId);
+          }
+        }
+      }
+      res.json({ ok: true });
+      return;
+    }
+
+    if (event === 'call_inbound') {
+      console.log('[buildops] call_inbound raw body:', JSON.stringify(req.body));
+      const toNumber = body.call?.to_number ?? '';
+      const fromNumber = body.call?.from_number ?? '';
+      const callId = body.call?.call_id || crypto.randomUUID();
 
       const resolution = await resolveByInboundNumber(toNumber);
       if (!resolution) {
@@ -261,9 +285,9 @@ router.post('/retell/webhook', async (req, res) => {
  */
 router.post('/fn/lookup_customer_fuzzy', async (req, res) => {
   try {
-    const payload = normalizedBuildopsPayload(req) as Record<string, unknown>;
-    const callId = (payload?.call as Record<string, unknown>)?.call_id as string | undefined;
-    const args = (payload?.args ?? payload?.arguments ?? {}) as Record<string, unknown>;
+    const body = req.body as Record<string, unknown>;
+    const callId = (body?.call as Record<string, unknown>)?.call_id as string | undefined;
+    const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
     if (!callId) { res.json({ result: 'error: call_id is required' }); return; }
     const resolved = await resolveSession(callId);
     if (!resolved) { res.json({ result: 'error: session not found' }); return; }
@@ -281,9 +305,9 @@ router.post('/fn/lookup_customer_fuzzy', async (req, res) => {
  */
 router.post('/fn/confirm_customer', async (req, res) => {
   try {
-    const payload = normalizedBuildopsPayload(req) as Record<string, unknown>;
-    const callId = (payload?.call as Record<string, unknown>)?.call_id as string | undefined;
-    const args = (payload?.args ?? payload?.arguments ?? {}) as Record<string, unknown>;
+    const body = req.body as Record<string, unknown>;
+    const callId = (body?.call as Record<string, unknown>)?.call_id as string | undefined;
+    const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
     if (!callId) { res.json({ result: 'error: call_id is required' }); return; }
     const resolved = await resolveSession(callId);
     if (!resolved) { res.json({ result: 'error: session not found' }); return; }
@@ -301,9 +325,9 @@ router.post('/fn/confirm_customer', async (req, res) => {
  */
 router.post('/fn/match_property', async (req, res) => {
   try {
-    const payload = normalizedBuildopsPayload(req) as Record<string, unknown>;
-    const callId = (payload?.call as Record<string, unknown>)?.call_id as string | undefined;
-    const args = (payload?.args ?? payload?.arguments ?? {}) as Record<string, unknown>;
+    const body = req.body as Record<string, unknown>;
+    const callId = (body?.call as Record<string, unknown>)?.call_id as string | undefined;
+    const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
     if (!callId) { res.json({ result: 'error: call_id is required' }); return; }
     const resolved = await resolveSession(callId);
     if (!resolved) { res.json({ result: 'error: session not found' }); return; }
@@ -321,9 +345,9 @@ router.post('/fn/match_property', async (req, res) => {
  */
 router.post('/fn/prepare_job', async (req, res) => {
   try {
-    const payload = normalizedBuildopsPayload(req) as Record<string, unknown>;
-    const callId = (payload?.call as Record<string, unknown>)?.call_id as string | undefined;
-    const args = (payload?.args ?? payload?.arguments ?? {}) as Record<string, unknown>;
+    const body = req.body as Record<string, unknown>;
+    const callId = (body?.call as Record<string, unknown>)?.call_id as string | undefined;
+    const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
     if (!callId) { res.json({ result: 'error: call_id is required' }); return; }
     const resolved = await resolveSession(callId);
     if (!resolved) { res.json({ result: 'error: session not found' }); return; }
@@ -341,9 +365,9 @@ router.post('/fn/prepare_job', async (req, res) => {
  */
 router.post('/fn/add_representative', async (req, res) => {
   try {
-    const payload = normalizedBuildopsPayload(req) as Record<string, unknown>;
-    const callId = (payload?.call as Record<string, unknown>)?.call_id as string | undefined;
-    const args = (payload?.args ?? payload?.arguments ?? {}) as Record<string, unknown>;
+    const body = req.body as Record<string, unknown>;
+    const callId = (body?.call as Record<string, unknown>)?.call_id as string | undefined;
+    const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
     if (!callId) { res.json({ result: 'error: call_id is required' }); return; }
     const resolved = await resolveSession(callId);
     if (!resolved) { res.json({ result: 'error: session not found' }); return; }
