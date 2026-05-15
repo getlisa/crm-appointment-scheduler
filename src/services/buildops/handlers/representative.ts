@@ -93,7 +93,7 @@ export async function handleSaveCallerNumber(
  *
  * @param session - Current call session (matchedCustomerId must be set)
  * @param ctx     - BuildOps API context
- * @param args    - Required: first_name, last_name, and at least one of phone or email
+ * @param args    - Required: first_name, last_name. Phone is taken from session.caller (from_number). Optional: email, property_id.
  * @returns RetellFunctionResult — status: added (with representative_id) | error
  */
 export async function handleAddRepresentative(
@@ -107,15 +107,12 @@ export async function handleAddRepresentative(
 
   const firstName = args.first_name as string | undefined;
   const lastName = args.last_name as string | undefined;
-  const phone = args.phone as string | undefined;
+  const phone = session.caller ?? undefined;
   const email = args.email as string | undefined;
   const propertyId = args.property_id as string | undefined;
 
   if (!firstName || !lastName) {
     return { result: 'error: first_name and last_name are required' };
-  }
-  if (!phone && !email) {
-    return { result: 'error: at least one of phone or email is required' };
   }
 
   const customer = await getCustomerById(session.tenantId, session.matchedCustomerId);

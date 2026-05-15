@@ -1,6 +1,7 @@
 # BuildOps Integration — Call Flow & Retell Custom Functions
 
 Lifecycle webhook: `POST /api/buildops/retell/webhook`  
+Full inbound webhook URL: `https://crm-appointment-scheduler.vercel.app/api/buildops/retell/webhook`  
 Custom function endpoints: `POST /api/buildops/fn/<function_name>`  
 Auth: `x-retell-signature: <Retell HMAC>`  
 Implementation: [`src/routes/buildops.ts`](../../src/routes/buildops.ts)
@@ -37,13 +38,13 @@ When `found` and `property_count = 1`: `property_id` is populated so the agent c
 
 Each Retell custom function has its own dedicated endpoint under `/api/buildops/fn/`. Retell calls the endpoint directly; no dispatcher — the endpoint resolves the call session, looks up tenant credentials, and delegates to the handler in `src/services/buildops/handlers/`.
 
-| Function name | Endpoint | Handler | Purpose |
-|---|---|---|---|
-| `lookup_customer_fuzzy` | `POST /api/buildops/fn/lookup_customer_fuzzy` | `handleLookupFuzzy` | Name/address/zip fuzzy search |
-| `confirm_customer` | `POST /api/buildops/fn/confirm_customer` | `handleConfirmCustomer` | Confirm which candidate from `multiple_matches` |
-| `match_property` | `POST /api/buildops/fn/match_property` | `handleMatchProperty` | Fuzzy-match spoken address to a property |
-| `prepare_job` | `POST /api/buildops/fn/prepare_job` | `handlePrepareJob` | Validate + create job in BuildOps (during the call) |
-| `add_representative` | `POST /api/buildops/fn/add_representative` | `handleAddRepresentative` | Create new named contact on the account |
+| Function name | Endpoint (path) | Full Retell webhook URL | Handler | Purpose |
+|---|---|---|---|---|
+| `lookup_customer_fuzzy` | `POST /api/buildops/fn/lookup_customer_fuzzy` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/lookup_customer_fuzzy` | `handleLookupFuzzy` | Name/address/zip fuzzy search |
+| `confirm_customer` | `POST /api/buildops/fn/confirm_customer` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/confirm_customer` | `handleConfirmCustomer` | Confirm which candidate from `multiple_matches` |
+| `match_property` | `POST /api/buildops/fn/match_property` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/match_property` | `handleMatchProperty` | Fuzzy-match spoken address to a property |
+| `prepare_job` | `POST /api/buildops/fn/prepare_job` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/prepare_job` | `handlePrepareJob` | Validate + create job in BuildOps (during the call) |
+| `add_representative` | `POST /api/buildops/fn/add_representative` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/add_representative` | `handleAddRepresentative` | Create new named contact on the account |
 
 ---
 
@@ -133,11 +134,14 @@ At least one parameter is required.
 | `requires_review` | `$.requires_review` | `found` — `true` when tier 2 |
 | `customer_id` | `$.customer_id` | `found` |
 | `customer_name` | `$.customer_name` | `found` |
-| `new_number_detected` | `$.new_number_detected` | `found` |
+| `new_number_detected` | `$.new_number_detected` | `found` — boolean |
+| `address` | `$.address` | `found` — primary address string |
+| `addressSource` | `$.addressSource` | `found` — source of the address (`propertyAddress`, `businessAddress`, etc.) |
+| `tier_reason` | `$.tier_reason` | `found` — the scoring rule that assigned the tier |
 | `property_count` | `$.property_count` | `found` |
 | `property_id` | `$.property_id` | `found` and `property_count = 1` |
 | `candidates` | `$.candidates` | `multiple_matches` — array of `{id, name, address, tier_reason}` (max 3) |
-| `message` | `$.message` | Special cases: `need_last_name`, `name_address_mismatch`, `no_matches`, `low_confidence_matches` |
+| `message` | `$.message` | Special cases: `need_last_name`, `name_address_mismatch`, `no_matches`, `low_confidence_matches`, `retell_data_mismatch` |
 
 ---
 
@@ -163,6 +167,8 @@ Confirms which customer from a `multiple_matches` result. Writes `matchedCustome
 | `status` | `$.status` | `confirmed` |
 | `customer_id` | `$.customer.id` | Confirmed BuildOps customer UUID |
 | `customer_name` | `$.customer.name` | Confirmed customer display name |
+| `customer_address` | `$.customer.address` | Primary address string for the customer |
+| `customer_addressSource` | `$.customer.addressSource` | Source of the address |
 | `property_count` | `$.property_count` | Number of service locations |
 | `property_id` | `$.property_id` | Set when `property_count = 1` |
 
@@ -185,14 +191,16 @@ Fuzzy-matches a spoken service address against the confirmed customer's properti
 
 **Response variables:**
 
-| Variable | JSON path | Description |
-|---|---|---|
-| `status` | `$.status` | `matched`, `ambiguous`, or `not_found` |
-| `property_id` | `$.property_id` | BuildOps property UUID (present when `matched`) |
-| `address` | `$.address` | Resolved address object |
-| `candidates` | `$.candidates` | Array of `{id, address}` (present when `ambiguous`) |
+| Variable | JSON path | Present when | Description |
+|---|---|---|---|
+| `status` | `$.status` | Always | `matched`, `ambiguous`, `not_found`, or `no_properties` |
+| `property_id` | `$.property_id` | `matched` | BuildOps property UUID |
+| `address` | `$.address` | `matched` | Resolved address object |
+| `candidates` | `$.candidates` | `ambiguous` | Array of `{id, address}` (max 3) |
+| `identified` | `$.identified` | `not_found` | Always `false` |
+| `message` | `$.message` | `not_found` | Always `address_not_matched` |
 
-Scores ≥ 0.60 → `matched`. Scores where top-2 gap < 0.15 → `ambiguous`. Below 0.60 → `not_found` + status set to `handed_off`.
+Scores ≥ 0.60 → `matched`. Scores where top-2 gap < 0.15 → `ambiguous`. Below 0.60 → `not_found` + session status set to `handed_off`. No properties on customer → `no_properties`.
 
 ---
 
@@ -210,7 +218,7 @@ Validates the account, creates the job in BuildOps, writes it to `buildops_jobs`
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `customer_property_id` | string | Yes | BuildOps property UUID (from `match_property` or `property_id` auto-set) |
-| `status` | string | No | Initial job status: `Open`, `In Progress`, `On Hold`, `Canceled`. Defaults to `Open` |
+| `status` | string | No | Initial job status: `Open`, `In Progress`, `On Hold`, `Canceled`, `Complete`. Defaults to `Open` |
 | `needs_review` | boolean | No | Set `true` when `confidence_tier = 2` (flags job for manual review) |
 | `tasks` | array | No | Task line items (see below) |
 
@@ -282,9 +290,10 @@ Creates a new named contact/representative on the BuildOps account and appends t
 |---|---|---|---|
 | `first_name` | string | Yes | Caller's first name |
 | `last_name` | string | Yes | Caller's last name |
-| `phone` | string | No | Phone to save (defaults to caller's `from_number`) |
 | `email` | string | No | Contact email |
 | `property_id` | string | No | BuildOps property UUID to associate the rep with |
+
+Phone is always taken from `session.caller` (`from_number`) — the agent never asks for it.
 
 Execution order:
 1. Create in BuildOps API (blocking — must succeed)
@@ -297,6 +306,7 @@ Execution order:
 |---|---|---|
 | `status` | `$.status` | `added` |
 | `representative_id` | `$.representative_id` | BuildOps rep UUID |
+| `name` | `$.name` | Full name string (`first_name last_name`) |
 
 ---
 

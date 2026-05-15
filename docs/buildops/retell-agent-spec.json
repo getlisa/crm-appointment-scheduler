@@ -1,110 +1,1185 @@
-[
-  {
-    "type": "webhook",
-    "name": "lookup_customer_fuzzy",
-    "description": "Search for an existing customer by name, address, zip code, or a previously used phone number when the caller's current number was not recognized. Invoke when status is 'not_found' or when the caller provides additional identifying information. At least one of name, address, property_address, or zip must be provided.",
-    "speak_during_execution": true,
-    "speak_after_execution": false,
-    "execution_message_description": "Let me look that up for you.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "name":             { "type": "string", "description": "Company or customer name as spoken by caller." },
-        "address":          { "type": "string", "description": "Billing or mailing address as spoken by caller." },
-        "property_address": { "type": "string", "description": "Service location address as spoken by caller." },
-        "zip":              { "type": "string", "description": "ZIP code as spoken by caller." },
-        "old_phone":        { "type": "string", "description": "A previously used phone number the caller provides." }
-      },
-      "required": []
-    }
+{
+  "agent_id": "",
+  "channel": "voice",
+  "last_modification_timestamp": 1778856088575,
+  "agent_name": "Crockett Facilities AH Test",
+  "version_description": "1 test of call",
+  "response_engine": {
+    "type": "retell-llm",
+    "llm_id": "llm_4c03cd5bdc10cab403a41b606199",
+    "version": 1
   },
-  {
-    "type": "webhook",
-    "name": "confirm_customer",
-    "description": "Confirm which customer the caller belongs to after a 'multiple_matches' response from lookup_customer_fuzzy. Read the candidate names and addresses to the caller, then invoke with the id of the one they confirm.",
-    "speak_during_execution": false,
-    "speak_after_execution": false,
-    "execution_message_description": "",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "candidate_id": { "type": "string", "description": "The id field from the chosen candidate in the candidates array returned by lookup_customer_fuzzy." }
-      },
-      "required": ["candidate_id"]
-    }
+  "webhook_url": "https://crm-appointment-scheduler.vercel.app/api/buildops/retell/webhook",
+  "language": "en-US",
+  "data_storage_setting": "everything",
+  "opt_in_signed_url": false,
+  "version": 1,
+  "base_version": 0,
+  "assigned_tags": [],
+  "is_published": false,
+  "version_title": "test1",
+  "post_call_analysis_model": "gpt-4.1-mini",
+  "pii_config": {
+    "mode": "post_call",
+    "categories": []
   },
-  {
-    "type": "webhook",
-    "name": "match_property",
-    "description": "Fuzzy-match a spoken service address against the confirmed customer's properties to get the BuildOps property UUID required by prepare_job. Invoke when the customer has more than one address on file and the caller states which address the job is for. Use the returned property_id as customer_property_id in prepare_job.",
-    "speak_during_execution": true,
-    "speak_after_execution": false,
-    "execution_message_description": "Let me find that address.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "spoken_address": { "type": "string", "description": "The service location address as spoken by the caller." }
-      },
-      "required": ["spoken_address"]
-    }
+  "handbook_config": {
+    "echo_verification": false,
+    "speech_normalization": false,
+    "default_personality": true,
+    "scope_boundaries": true,
+    "natural_filler_words": true,
+    "nato_phonetic_alphabet": false,
+    "high_empathy": true,
+    "ai_disclosure": true,
+    "smart_matching": false
   },
-  {
-    "type": "webhook",
-    "name": "prepare_job",
-    "description": "Queue a service job to be created in BuildOps after the call ends. Invoke once the customer is confirmed, the service address is resolved, and the service request is understood. Always set needs_review to true when the customer was matched with confidence_tier 2. Use the property_id from match_property as customer_property_id.",
-    "speak_during_execution": false,
-    "speak_after_execution": false,
-    "execution_message_description": "",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "customer_property_id": { "type": "string",  "description": "BuildOps property UUID for the service address. Use the property_id returned by match_property." },
-        "status":               { "type": "string",  "description": "Initial job status: Open, In Progress, On Hold, or Cancelled. Defaults to Open." },
-        "needs_review":         { "type": "boolean", "description": "Set true if the customer was matched at confidence_tier 2 (medium confidence). Flags the job for manual verification." },
-        "tasks": {
-          "type": "array",
-          "description": "Optional task line items for the job.",
-          "items": {
-            "type": "object",
-            "properties": {
-              "name": { "type": "string", "description": "Task display name shown on the work order." },
-              "entries": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "product_id":  { "type": "string", "description": "BuildOps product UUID." },
-                    "description": { "type": "string", "description": "Optional line item description override." },
-                    "quantity":    { "type": "number", "description": "Number of units. Defaults to 1." }
-                  },
-                  "required": ["product_id"]
-                }
-              }
+  "analysis_successful_prompt": "Evaluate whether Clara successfully handled the call — understood the caller's need, collected required information, and routed or resolved appropriately.",
+  "analysis_summary_prompt": "Write a 2-3 sentence summary of the call including caller details, nature of inquiry, and outcome.",
+  "analysis_user_sentiment_prompt": "Evaluate the caller's overall sentiment and urgency level.",
+  "post_call_analysis_data": [
+    {
+      "name": "call_type",
+      "description": "Category of the call.",
+      "type": "enum",
+      "choices": [
+        "emergency_service",
+        "non_emergency_service",
+        "accounts_payable",
+        "accounts_receivable",
+        "sales_lead",
+        "mobile_engineering",
+        "solicitation",
+        "other"
+      ]
+    },
+    {
+      "name": "dispatch_outcome",
+      "description": "Outcome of dispatch attempt if applicable.",
+      "type": "enum",
+      "choices": [
+        "technician_connected",
+        "backup_tech_connected",
+        "manager_connected",
+        "message_taken",
+        "retry_requested",
+        "no_dispatch_needed"
+      ]
+    },
+    {
+      "name": "caller_sentiment",
+      "description": "Caller emotional tone.",
+      "type": "enum",
+      "choices": [
+        "calm",
+        "anxious",
+        "frustrated",
+        "urgent",
+        "neutral"
+      ]
+    },
+    {
+      "name": "overtime_authorized",
+      "description": "Whether caller authorized overtime charges.",
+      "type": "enum",
+      "choices": [
+        "yes",
+        "no",
+        "not_applicable"
+      ]
+    },
+    {
+      "name": "is_existing_customer",
+      "description": "Whether caller identified as existing Crockett customer.",
+      "type": "enum",
+      "choices": [
+        "yes",
+        "no",
+        "unknown"
+      ]
+    },
+    {
+      "type": "string",
+      "name": "caller_name",
+      "description": "Full name of the caller."
+    },
+    {
+      "type": "string",
+      "name": "company_name",
+      "description": "Company or property name provided by caller."
+    },
+    {
+      "type": "string",
+      "name": "callback_number",
+      "description": "Best callback number confirmed with caller."
+    },
+    {
+      "type": "string",
+      "name": "service_address",
+      "description": "Service address confirmed with caller."
+    },
+    {
+      "type": "string",
+      "name": "oncall_tech_this_week",
+      "description": "Name of on-call technician for this week as returned by get_oncall_tech."
+    },
+    {
+      "type": "string",
+      "name": "oncall_manager_this_month",
+      "description": "Name of on-call manager as returned by get_oncall_tech."
+    },
+    {
+      "type": "string",
+      "name": "issue_summary",
+      "description": "One sentence summary of the issue or request."
+    },
+    {
+      "type": "system-presets",
+      "name": "call_summary",
+      "description": "Write a 2-3 sentence summary of the call including caller details, nature of inquiry, and outcome."
+    },
+    {
+      "type": "system-presets",
+      "name": "call_successful",
+      "description": "Evaluate whether Clara successfully handled the call — understood the caller's need, collected required information, and routed or resolved appropriately."
+    },
+    {
+      "type": "system-presets",
+      "name": "user_sentiment",
+      "description": "Evaluate the caller's overall sentiment and urgency level."
+    },
+    {
+      "name": "job_type",
+      "description": "Categorize the call based on the primary reason for calling. Choose the most accurate option: emergency_service if the caller needs immediate after-hours technician dispatch; non_emergency_service if the caller wants to schedule service for the next business day or a future date; accounts_payable if the caller has a question or inquiry related to an invoice they owe or a payment they need to make to Crockett; accounts_receivable if the caller is calling about money owed to them by Crockett or a billing dispute; sales_lead if the caller is a potential new customer or is requesting a quote or proposal; mobile_engineering if the caller is inquiring about mobile or temporary engineering services; solicitation if the caller is selling something or conducting a survey unrelated to Crockett's services; other if the call does not fit any of the above categories.",
+      "type": "enum",
+      "choices": [
+        "emergency_service",
+        "mobile_engineering",
+        "sales_lead",
+        "accounts_receivable",
+        "accounts_payable",
+        "solicitation",
+        "non_emergency_service"
+      ]
+    }
+  ],
+  "voice_id": "11labs-Grace",
+  "voice_temperature": 1,
+  "voice_speed": 1,
+  "enable_dynamic_voice_speed": true,
+  "volume": 1,
+  "enable_backchannel": true,
+  "backchannel_frequency": 0.5,
+  "max_call_duration_ms": 3600000,
+  "interruption_sensitivity": 0.75,
+  "responsiveness": 0.8,
+  "enable_dynamic_responsiveness": true,
+  "normalize_for_speech": false,
+  "begin_message_delay_ms": 1000,
+  "stt_mode": "accurate",
+  "allow_user_dtmf": false,
+  "user_dtmf_options": {},
+  "denoising_mode": "noise-and-background-speech-cancellation",
+  "retellLlmData": {
+    "llm_id": "llm_4c03cd5bdc10cab403a41b606199",
+    "version": 1,
+    "model": "gpt-4.1",
+    "model_high_priority": true,
+    "general_prompt": "\nIDENTITY\n- You are Clara, an AI voice assistant for Crockett Facilities Services.\n- You are professional, warm, and efficient at all times.\n- Do not identify yourself as an AI unless directly and sincerely asked. If asked, acknowledge it honestly and move on.\n- Never share personal phone numbers, personal emails, or internal staff details with callers under any circumstances.\n\n\nCONTEXT AWARENESS\nCurrent time (Eastern): {{current_time_America/New_York}}\n14-day calendar: {{current_calendar_America/New_York}}\nBusiness hours: Monday, Tuesday, Wednesday, Thursday, Friday: 7:30 AM - 3:30 PM\nOffice address: 4438 Lottsford Vista Road, Lanham, MD 20706\nInstructions:\n- Always use the America/New_York timezone (Eastern) to interpret any date or time mentioned by the caller.\n- If the caller says things like \"next Friday\", \"this weekend\", \"tomorrow\", or \"in the afternoon\", use the calendar and time to determine the exact date and time they mean.\n- When confirming or suggesting next-day service scheduling, clearly state the interpreted date — e.g., \"You mean Monday, May 4th 2026, correct?\"\n- Use the current time to determine whether the call is within business hours (Monday–Friday 7:30 AM–3:30 PM Eastern) or after hours, and behave accordingly.\n- If a caller reaches you during business hours, say: \"Our office is open right now — let me take your details and the team will assist you shortly.\" Collect name, callback number, and reason, then close.\n\n\nCALLER LOOKUP CONTEXT (auto-populated before call starts)\n- lookup_status: {{status}}. Possible values: \"found\" (caller recognized), \"not_found\" (unknown caller), \"multiple_matches\" (ambiguous — multiple accounts matched)\n- caller_name_on_file: {{customer_name}}\n- address: {{address}} — primary address on file for the confirmed customer (only set when status is \"found\")\n- address_source: {{address_source}} — where the address came from: \"businessAddress\" | \"propertyAddress\" | \"billingAddress\" (only set when status is \"found\")\n- candidates (JSON): {{addresses}}\n  When status is \"multiple_matches\" → array of {name, id, address, addressSource} objects (the matched accounts).\n  When status is \"not_found\" → empty array.\n- candidates_count: {{candidates_count}} — number of matched accounts, only meaningful when status is \"multiple_matches\"\n- property_count: {{property_count}}\n- property_id: {{property_id}}\n- new_number_detected: {{new_number_detected}}\nRules:\n- If lookup_status is \"found\" → treat caller as an EXISTING CUSTOMER. Do NOT ask \"Are you an existing customer?\".\n- If lookup_status is \"not_found\" → the caller's phone was not recognized. Ask for their name and service address, then call the `lookup_customer_fuzzy` function.\n  - If it returns status \"found\" → treat as existing customer and continue. The result includes `address` and `addressSource` (\"businessAddress\" | \"propertyAddress\" | \"billingAddress\") — use the address when confirming service location.\n  - If it returns status \"multiple_matches\" → count the candidates in the result and apply the count-based disambiguation rule below using those candidates.\n  - If it returns status \"not_found\" → treat caller as NEW / UNKNOWN. Follow the new customer branch.\n- If lookup_status is \"multiple_matches\" → apply the count-based disambiguation rule:\n  - If candidates_count is 1, 2, or 3: say \"I found [count] accounts against your number — [Name 1], [Name 2], and [Name 3]. Which company do you identify as?\" Then call the `confirm_customer` function with the candidate_id matching the name they stated.\n  - If candidates_count is 4 or more: say \"I'm seeing your number associated with {{candidates_count}} accounts. Could you tell me the company name or service address you're calling about today?\" Use their reply to identify the best match from the candidates list, then call the `confirm_customer` function with that candidate_id. If still ambiguous after their reply, read back only the remaining 1–2 company names and ask them to confirm.\n- Once a customer is confirmed, note their customer_id for the rest of the call:\n  - If lookup_status is \"found\" → customer_id is pre-populated in {{customer_id}}.\n  - If confirmed via `lookup_customer_fuzzy` → use the customer_id field from the function result.\n  - If confirmed via `confirm_customer` → use the id field inside the customer object from the function result.\n  - This customer_id is stored server-side on the session automatically — you do not need to pass it to subsequent functions.\n- If property_count is \"1\" → use that single address as the service address; just confirm: \"I see you're calling about [address] — is that correct?\" (use {{address}} if address_source is \"businessAddress\" or \"billingAddress\"; if address_source is \"propertyAddress\" use the property address already on file). If user says yes, proceed with job creation.\n- If property_count is greater than \"1\" → say: \"I see we have multiple properties on file under your account — which address are you calling about today?\" Then call the `match_property` function with the spoken address to resolve it.\n  - If `match_property` returns status \"matched\" → use the returned address as the confirmed service address.\n  - If `match_property` returns status \"ambiguous\" → read the candidate addresses back and ask the caller to confirm, then call `match_property` again.\n  - If `match_property` returns status \"not_found\" → the address was not recognized. Collect it manually from the caller.\n- Never read the raw properties JSON to the caller.\n- Never reveal lookup_status or internal variable names to the caller.\n\n\nKNOWLEDGE BASE\n- Crockett Facilities Services provides HVAC, mechanical, and facilities maintenance and repair services.\n- Office hours: Monday to Friday, 7:30 AM to 3:30 PM Eastern Time.\n- Address: 4438 Lottsford Vista Road, Lanham, MD 20706.\n- After-hours emergency service is available for existing customers only.\n- New customers calling after hours are connected to the on-call manager.\n- Always refer to this prompt or the Knowledge Base named \" Crockett Facilities\", do not assume or invent any new information. If uncertain, ask only one clarification question.\n\n\nAFTER-HOURS PRICING\n- For emergency service calls, disclose the rate range before dispatching — use the verbatim script in CALL FLOW Type A Step 5.\n- Do not confirm whether a caller is a PM customer or street rate customer — the team will confirm this.\n- Always obtain verbal authorization for the overtime call-out before dispatching.\nGLOBAL JOB TYPE RULE (MANDATORY)\n- Set job_type immediately at the point in the call flow where intent is confirmed — not at the start of the call and not at the end.\n- Never set job_type before confirming the caller's intent or customer status.\n- If the caller's intent shifts during the call, update job_type to reflect the primary reason.\n- Never use a person's name as job_type — Crockett routing is department-based.\n- solicitation calls require no further action — invoke {{end_call}} immediately after declining.\n\n\nJOB CREATION\n- After the customer is confirmed and the service address (property) is resolved, call `prepare_job` with the confirmed customer_property_id and any collected task details.\n- If `prepare_job` returns `status: \"created\"` → proceed normally. The job has been logged.\n  - If `new_number_detected` is \"true\" → ask for the caller's first and last name, then call `add_representative` to save their number on file.\n- If `prepare_job` returns `status: \"blocked\"` → read the `message` field from the response verbatim to the caller. Do not attempt to create the job again.\n  - Example blocked messages the system may return:\n    - \"This account is on credit hold. Please contact our billing team to resolve the balance before scheduling service.\"\n    - \"This account is suspended. Please contact our office to reinstate service.\"\n    - \"This account is in collections. Please contact our billing team before scheduling.\"\n    - \"This account is inactive and cannot have new jobs created.\"\n  - After reading the message, ask: \"Is there anything else I can help you with?\" If not, close the call normally.\n- If `prepare_job` returns an error → say: \"I'm having trouble logging this request — let me take your details and have the team follow up with you directly.\" Collect name, callback number, and issue, then close.\n\n\nINFORMATION COLLECTION\n- Collect all required information before confirming anything back.\n- Once all details are gathered, read them ALL back to the caller in a single confirmation:\n  \"Let me confirm your details — your name is [name], your callback number is [number], you're calling from [company] at [address], and your issue is [description]. Is all of that correct?\"\n- If the caller corrects any detail, update only that detail and confirm only that corrected piece:\n  \"Got it — updated the [address / number / etc.] to [corrected value]. Everything else remains the same.\"\n- Do NOT re-read all details after a correction. Only confirm the corrected field.\n- Never confirm individual pieces of information one at a time during collection — collect silently and confirm all at once at the end.\nCORE BEHAVIOR RULES\n- Ask only one question at a time.\n- Speak clearly and at a measured pace, especially during handoff summaries.\n- If you cannot hear the caller clearly: \"I'm sorry, I didn't quite catch that — could you say that again?\" Never guess.\n- If a caller is frustrated: \"I completely understand — let me get someone to help you as quickly as possible.\"\n- Never ask more than one question at a time.DO NOT stack multiple questions\n-Always refer to this prompt or the Knowledge Base named \" Crockett Facilities\", do not assume or invent any new information. If uncertain, ask only one clarification question.\n\n\nON-CALL DISPATCH\n- Use {{get_oncall_tech}} at the start of every emergency dispatch to determine today's on-call personnel.\n- The function returns: primary_tool, primary_name, backup_tool (may be null), backup_name, manager_tool, manager_name.\n- Use these values to invoke the correct transfer functions as described in the call flow below.\nCALL FLOW — AFTER HOURS\nSTEP 1 — GREET\n\"Thanks for calling Crockett Facilities Services, this is Clara — how may I help you?\"\nSTEP 2 — IDENTIFY CALL TYPE\n─────────────────────────────────────────────────\nCALL TYPE A — EMERGENCY / IMMEDIATE SERVICE REQUEST\n─────────────────────────────────────────────────\nTrigger: Caller needs a technician out tonight or urgently right now.\n1. Determine customer status from lookup_status:\n   - If lookup_status = \"found\" → proceed as EXISTING CUSTOMER. Greet by name: \"Hi {{customer_name}}, thanks for calling — I can help with that.\"\n   - If lookup_status = \"not_found\" or \"multiple_matches\" → follow the lookup rules in CALLER LOOKUP CONTEXT above before proceeding.\n2. Collect silently — name (pre-filled as {{customer_name}}, confirm only if needed),\n   service address (resolved via property_count logic above + {{match_property}} if multiple),\n   best callback number, brief description of the issue.\n3. Call `prepare_job` with the resolved `customer_property_id`.\n   - If `prepare_job` returns `status: \"blocked\"` → read the `message` field verbatim, ask \"Is there anything else I can help you with?\", then close.\n   - If `prepare_job` returns `status: \"created\"` → proceed to step 4.\n4. Read back all details at once and confirm:\n      \"Let me confirm your details — your name is [name], your callback number is [number], you're calling from [company] at [address], and your issue is [description]. Is all of that correct?\"\n   5. If correction needed — update only that field and confirm only that field:\n      \"Got it — updated the [field] to [corrected value]. Everything else remains the same.\"\n   6. Disclose overtime:\n      \"Before I connect you, after-hours service is billed at overtime rates — regular hourly rates are between one hundred and sixty-seven and one hundred and seventy-eight dollars per hour, and overtime rates are between two hundred and thirty-eight and two hundred and fifty-two dollars per hour, depending on your service agreement. There is a four-hour minimum plus a one-hundred-dollar trip charge. The team will confirm your exact rate before starting. Do you authorize the call-out?\"\n\nIF AUTHORIZED FOR IMMEDIATE DISPATCH:\n   - Invoke {{get_oncall_tech}} to get today's personnel.\n   - Say: \"Please hold for just a moment while I connect you.\"\n   - Invoke primary tech transfer tool returned by get_oncall_tech.\n   - If primary does not answer and backup exists:\n     \"Bear with me — let me try our backup technician.\"\n     Invoke backup tech transfer tool.\n   - If no tech answers:\n     \"Let me connect you with our on-call manager.\"\n     Invoke manager transfer tool.\n   - If manager does not answer:\n     \"I wasn't able to reach our on-call team right now. Would you like me to try again, or shall I take your details and have someone call you back as soon as possible?\"\n     - If retry → repeat from primary tech.\n     - If message → confirm details already collected are noted, close, invoke {{end_call}}.\n\nIF CALLER WANTS TO SCHEDULE FOR A LATER DATE instead of immediate dispatch:\n   → Update job_type = non_emergency_service\n   - Acknowledge: \"Absolutely — I'll make sure the team follows up with you to schedule a visit.\"\n   - Collect silently if not already done: name, company, service address, callback number, preferred date or timeframe, brief description of the issue.\n   - Read all details back at once and confirm.\n   - If correction — update only that field, confirm only that field.\n   - Ask: \"Is there anything else I can help you with?\"\n     - If yes → address it.\n     - If no → \"Thank you for calling Crockett Facilities — have a good evening.\" Invoke {{end_call}}.\n\nIF CALLER DECLINES THE CALL-OUT ENTIRELY:\n   - Acknowledge: \"Of course — no problem at all. If you change your mind or need anything, don't hesitate to call us back.\"\n   - Invoke {{end_call}}.\nIF NEW / UNKNOWN CUSTOMER:\n   → Set job_type = sales_lead\n   - Say: \"Since you're a new customer, I'll connect you with our on-call manager who can assist you directly.\"\n   - Invoke {{get_oncall_tech}} to get today's manager.\n   - Invoke manager transfer tool.\n   - If manager does not answer → collect name, callback number, and issue. Close and invoke {{end_call}}.\n\n─────────────────────────────────────────────────\nCALL TYPE B — NON-EMERGENCY / NEXT-DAY SERVICE\n─────────────────────────────────────────────────\nTrigger: Caller wants to schedule service for the next business day or a future date. Not urgent tonight.\n→ Set job_type = non_emergency_service\n0. Determine customer status and resolve property — follow the CALLER LOOKUP CONTEXT rules and property_count logic exactly as in Type A before collecting job details. If the caller is new/unknown, treat as a sales_lead and follow Type E instead.\n1. Acknowledge: \"Absolutely — I'll make sure the team gets this first thing in the morning.\"\n2. Collect silently: name, company, service address, callback number, service description.\n3. Call `prepare_job` with the resolved `customer_property_id`.\n   - If `prepare_job` returns `status: \"blocked\"` → read the `message` field verbatim, ask \"Is there anything else I can help you with?\", then close.\n   - If `prepare_job` returns `status: \"created\"` → proceed to step 4.\n4. Read all details back at once and confirm:\n   \"Let me confirm your details — your name is [name], your callback number is [number], you're calling from [company] at [address], and you need [description]. Is all of that correct?\"\n5. If correction — update only that field, confirm only that field.\n6. Ask: \"Is there anything else I can help you with?\"\n   - If yes → address it.\n   - If no → \"Thank you for calling Crockett Facilities — have a good evening.\" Invoke {{end_call}}.\n\n─────────────────────────────────────────────────\nCALL TYPE C — ACCOUNTS PAYABLE\n─────────────────────────────────────────────────\nTrigger: Caller has a question about an invoice they owe or a payment to Crockett.\n→ Set job_type = accounts_payable\n1. Acknowledge: \"I'll make sure the accounts payable team receives your message.\"\n2. Collect silently: name, company, callback number, brief description of the inquiry.\n3. Confirm all details at once.\n4. Ask: \"Is there anything else I can help you with?\"\n   - If yes → address it.\n   - If no → \"Thank you for calling Crockett Facilities — have a good evening.\" Invoke {{end_call}}.\n\n─────────────────────────────────────────────────\nCALL TYPE D — ACCOUNTS RECEIVABLE\n─────────────────────────────────────────────────\nTrigger: Caller is inquiring about money owed to them by Crockett or a billing dispute.\n→ Set job_type = accounts_receivable\n1. Acknowledge: \"I'll pass your details along to our accounts receivable team.\"\n2. Collect silently: name, company, callback number, brief description of the inquiry.\n3. Confirm all details at once.\n4. Ask: \"Is there anything else I can help you with?\"\n   - If yes → address it.\n   - If no → \"Thank you for calling Crockett Facilities — have a good evening.\" Invoke {{end_call}}.\n\n─────────────────────────────────────────────────\nCALL TYPE E — SALES LEADS / PROPOSAL REQUESTS\n─────────────────────────────────────────────────\nTrigger: Caller is a potential new customer or requesting a quote or proposal.\n→ Set job_type = sales_lead\n1. Acknowledge: \"Wonderful — I'll make sure our sales team follows up with you.\"\n2. Collect silently: name, company, contact number, email (optional), service needed or project scope.\n3. Confirm all details at once.\n4. Ask: \"Is there anything else I can help you with?\"\n   - If yes → address it.\n   - If no → \"Thank you for calling Crockett Facilities — have a good evening.\" Invoke {{end_call}}.\n\n─────────────────────────────────────────────────\nCALL TYPE F — MOBILE / TEMPORARY ENGINEERING\n─────────────────────────────────────────────────\nTrigger: Caller is inquiring about mobile or temporary engineering services.\n→ Set job_type = mobile_engineering\n1. Acknowledge: \"I'll pass your details along to our mobile department.\"\n2. Collect silently: name, company, contact number, project details.\n3. Confirm all details at once.\n4. Ask: \"Is there anything else I can help you with?\"\n   - If yes → address it.\n   - If no → \"Thank you for calling Crockett Facilities — have a good evening.\" Invoke {{end_call}}.\n\n─────────────────────────────────────────────────\nCALL TYPE G — SOLICITATIONS / IRRELEVANT CALLS\n─────────────────────────────────────────────────\nTrigger: Caller is selling something or conducting a survey unrelated to Crockett's services.\n→ Set job_type = solicitation\n1. \"Thank you for reaching out — we're not interested at this time. Have a great evening.\"\n2. Invoke {{end_call}} immediately. No further action needed.\nSTANDARD NOTIFICATION RULE\nFor ALL service-related calls (Types A and B), Meg Jones must always receive a notification in addition to any other recipient.\n\nCLOSING RULE\n- Before every {{end_call}}, ask: \"Is there anything else I can help you with?\"\n- If yes → address it fully before asking again.\n- Only when the caller confirms there is nothing else → say: \"Thank you for calling Crockett Facilities — have a good evening.\" Then invoke {{end_call}}.\n- Exception: solicitations — close immediately without the \"anything else\" gate.\nHARD RULES — NEVER VIOLATE\n- Never share personal phone numbers, emails, or staff contact details with callers.\n- Never dispatch without verbal overtime authorization.\n- Never quote specific contract rates — give the range only and let the team confirm.\n- Never set job_type before the caller's intent and customer status are confirmed.\n- Never confirm information piecemeal during collection — always collect silently, confirm all at once.\n- Never re-read all details after a partial correction — only confirm the corrected field.\n- Never ask more than one question at a time.",
+    "general_tools": [
+      {
+        "name": "end_call",
+        "description": "End the call. Only invoke after asking 'Is there anything else I can help you with?' and the caller confirms there is nothing else.",
+        "type": "end_call",
+        "speak_after_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+12405172918"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Omar_Garcia_Jr",
+        "description": "Transfer to Omar Garcia Jr (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
             },
-            "required": ["name", "entries"]
+            "transfer_timeout_ms": 29000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+14438145767"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Elder_Rodriguez",
+        "description": "Transfer to Elder Rodriguez (on-call mentor / backup technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 34000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+14107397327"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Kyle_Thomas",
+        "description": "Transfer to Kyle Thomas (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 32000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 34000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+14438143662"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Aaron_Pratt",
+        "description": "Transfer to Aaron Pratt (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 31000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 37000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+14438143869"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Eric_Beer",
+        "description": "Transfer to Eric Beer (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 32000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+14435091774"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Joseph_Boecker",
+        "description": "Transfer to Joseph Boecker (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 34000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+14435915527"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Damonz_Vann",
+        "description": "Transfer to Damonz Vann (on-call manager). Invoke when get_oncall_tech returns this person as manager_tool — used when technician transfer failed or caller is a new customer.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 31000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+13015187994"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Zachary_Marshall",
+        "description": "Transfer to Zachary Marshall (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 32000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+13018062799"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Kamahl_Scott",
+        "description": "Transfer to Kamahl Scott (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 28000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 38000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+14436221238"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Ryan_Gordan",
+        "description": "Transfer to Ryan Gordan (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+14435910378"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Tony_Merlo",
+        "description": "Transfer to Tony Merlo (on-call manager). Invoke when get_oncall_tech returns this person as manager_tool — used when technician transfer failed or caller is a new customer.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 31000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+13014043996"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Thomas_Beder",
+        "description": "Transfer to Thomas Beder (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 31000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 30000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+13014371012"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Timothy_Wylie",
+        "description": "Transfer to Timothy Wylie (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 31000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+13018326098"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Brett_Weaver",
+        "description": "Transfer to Brett Weaver (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+12405870397"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Austin_Ramsy",
+        "description": "Transfer to Austin Ramsy (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 29000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+13015373437"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Megan_Jones",
+        "description": "Transfer to Megan Jones (on-call manager). Invoke when get_oncall_tech returns this person as manager_tool — used when technician transfer failed or caller is a new customer.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+12409063705"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Brian_Cruz",
+        "description": "Transfer to Brian Cruz (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 33000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+13018920562"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Justin_Hope",
+        "description": "Transfer to Justin Hope (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 31000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+12404310436"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Tiffany_Gibson",
+        "description": "Transfer to Tiffany Gibson (on-call manager). Invoke when get_oncall_tech returns this person as manager_tool — used when technician transfer failed or caller is a new customer.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 31000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+12408084993"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Nick_Sansbury",
+        "description": "Transfer to Nick Sansbury (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 29000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+13019965071"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Akil_Raphael",
+        "description": "Transfer to Akil Raphael (on-call technician). Invoke when get_oncall_tech returns this person as primary_tool or backup_tool for today's date.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 31000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+14435910733"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Scott_Dashiell",
+        "description": "Transfer to Scott Dashiell (on-call manager). Invoke when get_oncall_tech returns this person as manager_tool — used when technician transfer failed or caller is a new customer.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+14438069202"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Brittney_Moyer",
+        "description": "Transfer to Brittney Moyer (on-call manager). Invoke when get_oncall_tech returns this person as manager_tool — used when technician transfer failed or caller is a new customer.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 31000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "code": "const schedule = [\n  {start:\"2026-01-05\",end:\"2026-01-12\",primary:\"transfer_call_Aaron_Pratt\",primaryName:\"Aaron Pratt\",backup:null,backupName:null,manager:\"transfer_call_Mike_Plotts\",managerName:\"Mike Plotts\"},\n  {start:\"2026-01-12\",end:\"2026-01-19\",primary:\"transfer_call_Omar_Garcia_Jr\",primaryName:\"Omar Garcia Jr\",backup:\"transfer_call_Elder_Rodriguez\",backupName:\"Elder Rodriguez\",manager:\"transfer_call_Mike_Plotts\",managerName:\"Mike Plotts\"},\n  {start:\"2026-01-19\",end:\"2026-01-26\",primary:\"transfer_call_Kyle_Thomas\",primaryName:\"Kyle Thomas\",backup:null,backupName:null,manager:\"transfer_call_Mike_Plotts\",managerName:\"Mike Plotts\"},\n  {start:\"2026-01-26\",end:\"2026-02-02\",primary:\"transfer_call_Eric_Beer\",primaryName:\"Eric Beer\",backup:null,backupName:null,manager:\"transfer_call_Mike_Plotts\",managerName:\"Mike Plotts\"},\n  {start:\"2026-02-02\",end:\"2026-02-09\",primary:\"transfer_call_Joseph_Boecker\",primaryName:\"Joseph Boecker\",backup:null,backupName:null,manager:\"transfer_call_Damonz_Vann\",managerName:\"Damonz Vann\"},\n  {start:\"2026-02-09\",end:\"2026-02-16\",primary:\"transfer_call_Zachary_Marshall\",primaryName:\"Zachary Marshall\",backup:null,backupName:null,manager:\"transfer_call_Damonz_Vann\",managerName:\"Damonz Vann\"},\n  {start:\"2026-02-16\",end:\"2026-02-23\",primary:\"transfer_call_Kamahl_Scott\",primaryName:\"Kamahl Scott\",backup:null,backupName:null,manager:\"transfer_call_Damonz_Vann\",managerName:\"Damonz Vann\"},\n  {start:\"2026-02-23\",end:\"2026-03-01\",primary:\"transfer_call_Kyle_Thomas\",primaryName:\"Kyle Thomas\",backup:null,backupName:null,manager:\"transfer_call_Damonz_Vann\",managerName:\"Damonz Vann\"},\n  {start:\"2026-03-02\",end:\"2026-03-08\",primary:\"transfer_call_Ryan_Gordan\",primaryName:\"Ryan Gordan\",backup:null,backupName:null,manager:\"transfer_call_Tony_Merlo\",managerName:\"Tony Merlo\"},\n  {start:\"2026-03-09\",end:\"2026-03-15\",primary:\"transfer_call_Thomas_Beder\",primaryName:\"Thomas Beder\",backup:null,backupName:null,manager:\"transfer_call_Tony_Merlo\",managerName:\"Tony Merlo\"},\n  {start:\"2026-03-16\",end:\"2026-03-22\",primary:\"transfer_call_Timothy_Wylie\",primaryName:\"Timothy Wylie\",backup:null,backupName:null,manager:\"transfer_call_Tony_Merlo\",managerName:\"Tony Merlo\"},\n  {start:\"2026-03-23\",end:\"2026-03-29\",primary:\"transfer_call_Omar_Garcia_Jr\",primaryName:\"Omar Garcia Jr\",backup:\"transfer_call_Elder_Rodriguez\",backupName:\"Elder Rodriguez\",manager:\"transfer_call_Tony_Merlo\",managerName:\"Tony Merlo\"},\n  {start:\"2026-03-30\",end:\"2026-04-05\",primary:\"transfer_call_Brett_Weaver\",primaryName:\"Brett Weaver\",backup:null,backupName:null,manager:\"transfer_call_Tony_Merlo\",managerName:\"Tony Merlo\"},\n  {start:\"2026-04-06\",end:\"2026-04-12\",primary:\"transfer_call_Austin_Ramsy\",primaryName:\"Austin Ramsy\",backup:null,backupName:null,manager:\"transfer_call_Megan_Jones\",managerName:\"Megan Jones\"},\n  {start:\"2026-04-13\",end:\"2026-04-19\",primary:\"transfer_call_Zachary_Marshall\",primaryName:\"Zachary Marshall\",backup:null,backupName:null,manager:\"transfer_call_Megan_Jones\",managerName:\"Megan Jones\"},\n  {start:\"2026-04-20\",end:\"2026-04-26\",primary:\"transfer_call_Brian_Cruz\",primaryName:\"Brian Cruz\",backup:null,backupName:null,manager:\"transfer_call_Megan_Jones\",managerName:\"Megan Jones\"},\n  {start:\"2026-04-27\",end:\"2026-05-03\",primary:\"transfer_call_Joseph_Boecker\",primaryName:\"Joseph Boecker\",backup:null,backupName:null,manager:\"transfer_call_Megan_Jones\",managerName:\"Megan Jones\"},\n  {start:\"2026-05-04\",end:\"2026-05-10\",primary:\"transfer_call_Justin_Hope\",primaryName:\"Justin Hope\",backup:null,backupName:null,manager:\"transfer_call_Tiffany_Gibson\",managerName:\"Tiffany Gibson\"},\n  {start:\"2026-05-11\",end:\"2026-05-17\",primary:\"transfer_call_Eric_Beer\",primaryName:\"Eric Beer\",backup:null,backupName:null,manager:\"transfer_call_Tiffany_Gibson\",managerName:\"Tiffany Gibson\"},\n  {start:\"2026-05-18\",end:\"2026-05-24\",primary:\"transfer_call_Thomas_Beder\",primaryName:\"Thomas Beder\",backup:\"transfer_call_Justin_Hope\",backupName:\"Justin Hope\",manager:\"transfer_call_Tiffany_Gibson\",managerName:\"Tiffany Gibson\"},\n  {start:\"2026-05-25\",end:\"2026-05-31\",primary:\"transfer_call_Nick_Sansbury\",primaryName:\"Nick Sansbury\",backup:\"transfer_call_Aaron_Pratt\",backupName:\"Aaron Pratt\",manager:\"transfer_call_Tiffany_Gibson\",managerName:\"Tiffany Gibson\"},\n  {start:\"2026-06-01\",end:\"2026-06-07\",primary:\"transfer_call_Brett_Weaver\",primaryName:\"Brett Weaver\",backup:\"transfer_call_Akil_Raphael\",backupName:\"Akil Raphael\",manager:\"transfer_call_Scott_Dashiell\",managerName:\"Scott Dashiell\"},\n  {start:\"2026-06-08\",end:\"2026-06-14\",primary:\"transfer_call_Ryan_Gordan\",primaryName:\"Ryan Gordan\",backup:\"transfer_call_Timothy_Wylie\",backupName:\"Timothy Wylie\",manager:\"transfer_call_Scott_Dashiell\",managerName:\"Scott Dashiell\"},\n  {start:\"2026-06-15\",end:\"2026-06-21\",primary:\"transfer_call_Eric_Beer\",primaryName:\"Eric Beer\",backup:\"transfer_call_Austin_Ramsy\",backupName:\"Austin Ramsy\",manager:\"transfer_call_Scott_Dashiell\",managerName:\"Scott Dashiell\"},\n  {start:\"2026-06-22\",end:\"2026-06-28\",primary:\"transfer_call_Brian_Cruz\",primaryName:\"Brian Cruz\",backup:\"transfer_call_Kamahl_Scott\",backupName:\"Kamahl Scott\",manager:\"transfer_call_Scott_Dashiell\",managerName:\"Scott Dashiell\"},\n  {start:\"2026-06-29\",end:\"2026-07-05\",primary:\"transfer_call_Thomas_Beder\",primaryName:\"Thomas Beder\",backup:\"transfer_call_Justin_Hope\",backupName:\"Justin Hope\",manager:\"transfer_call_Brittney_Moyer\",managerName:\"Brittney Moyer\"},\n  {start:\"2026-07-06\",end:\"2026-07-12\",primary:\"transfer_call_Nick_Sansbury\",primaryName:\"Nick Sansbury\",backup:\"transfer_call_Aaron_Pratt\",backupName:\"Aaron Pratt\",manager:\"transfer_call_Brittney_Moyer\",managerName:\"Brittney Moyer\"},\n  {start:\"2026-07-13\",end:\"2026-07-19\",primary:\"transfer_call_Ryan_Gordan\",primaryName:\"Ryan Gordan\",backup:\"transfer_call_Timothy_Wylie\",backupName:\"Timothy Wylie\",manager:\"transfer_call_Brittney_Moyer\",managerName:\"Brittney Moyer\"},\n  {start:\"2026-07-20\",end:\"2026-07-26\",primary:\"transfer_call_Brian_Cruz\",primaryName:\"Brian Cruz\",backup:\"transfer_call_Kamahl_Scott\",backupName:\"Kamahl Scott\",manager:\"transfer_call_Brittney_Moyer\",managerName:\"Brittney Moyer\"},\n  {start:\"2026-07-27\",end:\"2026-08-02\",primary:\"transfer_call_Brett_Weaver\",primaryName:\"Brett Weaver\",backup:\"transfer_call_Akil_Raphael\",backupName:\"Akil Raphael\",manager:\"transfer_call_Brittney_Moyer\",managerName:\"Brittney Moyer\"},\n  {start:\"2026-08-03\",end:\"2026-08-09\",primary:\"transfer_call_Thomas_Beder\",primaryName:\"Thomas Beder\",backup:\"transfer_call_Justin_Hope\",backupName:\"Justin Hope\",manager:\"transfer_call_Mike_Plotts\",managerName:\"Mike Plotts\"},\n  {start:\"2026-08-10\",end:\"2026-08-16\",primary:\"transfer_call_Nick_Sansbury\",primaryName:\"Nick Sansbury\",backup:\"transfer_call_Aaron_Pratt\",backupName:\"Aaron Pratt\",manager:\"transfer_call_Mike_Plotts\",managerName:\"Mike Plotts\"},\n  {start:\"2026-08-17\",end:\"2026-08-23\",primary:\"transfer_call_Ryan_Gordan\",primaryName:\"Ryan Gordan\",backup:\"transfer_call_Timothy_Wylie\",backupName:\"Timothy Wylie\",manager:\"transfer_call_Mike_Plotts\",managerName:\"Mike Plotts\"},\n  {start:\"2026-08-24\",end:\"2026-08-30\",primary:\"transfer_call_Eric_Beer\",primaryName:\"Eric Beer\",backup:\"transfer_call_Austin_Ramsy\",backupName:\"Austin Ramsy\",manager:\"transfer_call_Mike_Plotts\",managerName:\"Mike Plotts\"},\n  {start:\"2026-08-31\",end:\"2026-09-06\",primary:\"transfer_call_Zachary_Marshall\",primaryName:\"Zachary Marshall\",backup:null,backupName:null,manager:\"transfer_call_Damonz_Vann\",managerName:\"Damonz Vann\"},\n  {start:\"2026-09-07\",end:\"2026-09-13\",primary:\"transfer_call_Omar_Garcia_Jr\",primaryName:\"Omar Garcia Jr\",backup:\"transfer_call_Elder_Rodriguez\",backupName:\"Elder Rodriguez\",manager:\"transfer_call_Damonz_Vann\",managerName:\"Damonz Vann\"},\n  {start:\"2026-09-14\",end:\"2026-09-20\",primary:\"transfer_call_Kyle_Thomas\",primaryName:\"Kyle Thomas\",backup:null,backupName:null,manager:\"transfer_call_Damonz_Vann\",managerName:\"Damonz Vann\"},\n  {start:\"2026-09-21\",end:\"2026-09-27\",primary:\"transfer_call_Brian_Cruz\",primaryName:\"Brian Cruz\",backup:null,backupName:null,manager:\"transfer_call_Damonz_Vann\",managerName:\"Damonz Vann\"},\n  {start:\"2026-09-28\",end:\"2026-10-04\",primary:\"transfer_call_Nick_Sansbury\",primaryName:\"Nick Sansbury\",backup:null,backupName:null,manager:\"transfer_call_Damonz_Vann\",managerName:\"Damonz Vann\"},\n  {start:\"2026-10-05\",end:\"2026-10-11\",primary:\"transfer_call_Kyle_Thomas\",primaryName:\"Kyle Thomas\",backup:null,backupName:null,manager:\"transfer_call_Tony_Merlo\",managerName:\"Tony Merlo\"},\n  {start:\"2026-10-12\",end:\"2026-10-18\",primary:\"transfer_call_Timothy_Wylie\",primaryName:\"Timothy Wylie\",backup:null,backupName:null,manager:\"transfer_call_Tony_Merlo\",managerName:\"Tony Merlo\"},\n  {start:\"2026-10-19\",end:\"2026-10-25\",primary:\"transfer_call_Omar_Garcia_Jr\",primaryName:\"Omar Garcia Jr\",backup:\"transfer_call_Elder_Rodriguez\",backupName:\"Elder Rodriguez\",manager:\"transfer_call_Tony_Merlo\",managerName:\"Tony Merlo\"},\n  {start:\"2026-10-26\",end:\"2026-11-01\",primary:\"transfer_call_Eric_Beer\",primaryName:\"Eric Beer\",backup:null,backupName:null,manager:\"transfer_call_Tony_Merlo\",managerName:\"Tony Merlo\"},\n  {start:\"2026-11-02\",end:\"2026-11-08\",primary:\"transfer_call_Thomas_Beder\",primaryName:\"Thomas Beder\",backup:null,backupName:null,manager:\"transfer_call_Megan_Jones\",managerName:\"Megan Jones\"},\n  {start:\"2026-11-09\",end:\"2026-11-15\",primary:\"transfer_call_Ryan_Gordan\",primaryName:\"Ryan Gordan\",backup:null,backupName:null,manager:\"transfer_call_Megan_Jones\",managerName:\"Megan Jones\"},\n  {start:\"2026-11-16\",end:\"2026-11-22\",primary:\"transfer_call_Zachary_Marshall\",primaryName:\"Zachary Marshall\",backup:null,backupName:null,manager:\"transfer_call_Megan_Jones\",managerName:\"Megan Jones\"},\n  {start:\"2026-11-23\",end:\"2026-11-29\",primary:\"transfer_call_Omar_Garcia_Jr\",primaryName:\"Omar Garcia Jr\",backup:\"transfer_call_Elder_Rodriguez\",backupName:\"Elder Rodriguez\",manager:\"transfer_call_Megan_Jones\",managerName:\"Megan Jones\"},\n  {start:\"2026-11-30\",end:\"2026-12-06\",primary:\"transfer_call_Brett_Weaver\",primaryName:\"Brett Weaver\",backup:null,backupName:null,manager:\"transfer_call_Tiffany_Gibson\",managerName:\"Tiffany Gibson\"},\n  {start:\"2026-12-07\",end:\"2026-12-13\",primary:\"transfer_call_Akil_Raphael\",primaryName:\"Akil Raphael\",backup:null,backupName:null,manager:\"transfer_call_Tiffany_Gibson\",managerName:\"Tiffany Gibson\"},\n  {start:\"2026-12-14\",end:\"2026-12-20\",primary:\"transfer_call_Zachary_Marshall\",primaryName:\"Zachary Marshall\",backup:null,backupName:null,manager:\"transfer_call_Tiffany_Gibson\",managerName:\"Tiffany Gibson\"},\n  {start:\"2026-12-21\",end:\"2026-12-27\",primary:\"transfer_call_Kamahl_Scott\",primaryName:\"Kamahl Scott\",backup:null,backupName:null,manager:\"transfer_call_Tiffany_Gibson\",managerName:\"Tiffany Gibson\"},\n  {start:\"2026-12-28\",end:\"2027-01-03\",primary:\"transfer_call_Austin_Ramsy\",primaryName:\"Austin Ramsy\",backup:null,backupName:null,manager:\"transfer_call_Tiffany_Gibson\",managerName:\"Tiffany Gibson\"}\n];\nconst now = new Date(new Date().toLocaleString(\"en-US\", {timeZone:\"America/New_York\"}));\nconst today = now.toISOString().split(\"T\")[0];\nlet result = null;\nfor (const w of schedule) {\n  if (today >= w.start && today < w.end) { result = w; break; }\n}\nif (!result) result = schedule[schedule.length - 1];\nreturn {\n  primary_tool: result.primary,\n  primary_name: result.primaryName,\n  backup_tool: result.backup,\n  backup_name: result.backupName,\n  manager_tool: result.manager,\n  manager_name: result.managerName\n};",
+        "execution_message_description": "Let me check who is on call right now and connect you to the right personnel",
+        "timeout_ms": 15000,
+        "speak_after_execution": false,
+        "name": "get_oncall_tech",
+        "description": "Determines today's on-call technician and manager based on the current date in Eastern Time. Returns primary_tool, primary_name, backup_tool (null if none), backup_name, manager_tool, manager_name. Invoke at the start of every emergency dispatch before transferring.",
+        "enable_typing_sound": false,
+        "type": "code",
+        "speak_during_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+13018327318"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call_Mike_Plotts",
+        "description": "Transfer to Mike Plotts (on-call manager). Invoke when get_oncall_tech returns this person as manager_tool — used when technician transfer failed or caller is a new customer.",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "transfer_ring_duration_ms": 30000,
+          "on_hold_music": "ringtone",
+          "agentic_transfer_config": {
+            "transfer_agent": {
+              "agent_version": 2,
+              "agent_id": "agent_23b45068b4f9a6becf7156c302"
+            },
+            "transfer_timeout_ms": 60000,
+            "action_on_timeout": "cancel_transfer"
+          },
+          "enable_bridge_audio_cue": true,
+          "type": "agentic_warm_transfer",
+          "agent_detection_timeout_ms": 30000,
+          "show_transferee_as_caller": true
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "headers": {},
+        "parameter_type": "form",
+        "execution_message_type": "prompt",
+        "method": "POST",
+        "query_params": {},
+        "description": "Creates a new named contact/representative on the BuildOps account and appends their phone to the customer's all_numbers for future lookups.",
+        "enable_typing_sound": false,
+        "type": "custom",
+        "url": "https://crm-appointment-scheduler.vercel.app/api/buildops/fn/add_representative",
+        "args_at_root": true,
+        "timeout_ms": 5000,
+        "speak_after_execution": true,
+        "name": "add_representative",
+        "response_variables": {
+          "representative_id": "$.representative_id",
+          "name": "$.name",
+          "status": "$.status"
+        },
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "required": [
+            "last_name",
+            "first_name"
+          ],
+          "properties": {
+            "last_name": {
+              "type": "string",
+              "description": "Caller's last name"
+            },
+            "first_name": {
+              "type": "string",
+              "description": "Caller's first name"
+            },
+            "email": {
+              "type": "string",
+              "description": "Caller's email"
+            },
+            "property_id": {
+              "type": "string",
+              "description": "Buildops's property uuid to associate the user with "
+            }
           }
         }
       },
-      "required": ["customer_property_id"]
-    }
-  },
-  {
-    "type": "webhook",
-    "name": "add_representative",
-    "description": "Save a newly detected caller number to the customer's BuildOps account by creating a representative entry. Invoke when new_number_detected is true after customer identification. Collect the caller's first and last name before invoking.",
-    "speak_during_execution": false,
-    "speak_after_execution": false,
-    "execution_message_description": "",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "first_name":  { "type": "string", "description": "Caller's first name." },
-        "last_name":   { "type": "string", "description": "Caller's last name." },
-        "phone":       { "type": "string", "description": "Phone number to save. Omit to default to the caller's from_number." },
-        "email":       { "type": "string", "description": "Contact email (optional)." },
-        "property_id": { "type": "string", "description": "BuildOps property UUID to associate this representative with (optional)." }
+      {
+        "headers": {},
+        "parameter_type": "form",
+        "execution_message_type": "prompt",
+        "method": "POST",
+        "query_params": {},
+        "description": "Validates the account, creates the job in BuildOps, writes it to buildops_jobs, and creates any task line items — all during the call before returning to Retell.\n",
+        "enable_typing_sound": false,
+        "type": "custom",
+        "url": "https://crm-appointment-scheduler.vercel.app/api/buildops/fn/prepare_job",
+        "args_at_root": true,
+        "timeout_ms": 5000,
+        "speak_after_execution": true,
+        "name": "prepare_job",
+        "response_variables": {
+          "needs_review": "$.needs_review",
+          "job_status": "$.summary.job_status",
+          "property_address": "$.summary.property_address",
+          "job_id": "$.job_id",
+          "job_number": "$.job_number",
+          "status": "$.status",
+          "task_count": "$.summary.task_count"
+        },
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "required": [
+            "customer_property_id"
+          ],
+          "properties": {
+            "needs_review": {
+              "type": "boolean",
+              "description": "\tSet true when confidence_tier = 2 (flags job for manual review)"
+            },
+            "customer_property_id": {
+              "type": "string",
+              "description": "BuildOps property UUID (from match_property or property_id auto-set)"
+            },
+            "status": {
+              "type": "string",
+              "description": "Initial job status: Open, In Progress, On Hold, Canceled, Complete. Defaults to Open"
+            }
+          }
+        }
       },
-      "required": ["first_name", "last_name"]
-    }
+      {
+        "headers": {},
+        "parameter_type": "form",
+        "execution_message_type": "static_text",
+        "method": "POST",
+        "query_params": {},
+        "description": "Fuzzy-matches a spoken service address against the confirmed customer's properties using token-set ratio + city/zip bonuses. Returns the property UUID needed for prepare_job.\n\n",
+        "enable_typing_sound": false,
+        "type": "custom",
+        "url": "https://crm-appointment-scheduler.vercel.app/api/buildops/fn/match_property",
+        "args_at_root": true,
+        "execution_message_description": "Let me look up the address",
+        "timeout_ms": 6000,
+        "speak_after_execution": true,
+        "name": "match_property",
+        "response_variables": {
+          "candidates": "$.candidates",
+          "address": "$.address",
+          "identified": "$.identified",
+          "message": "$.message",
+          "property_id": "$.property_id",
+          "status": "$.status"
+        },
+        "speak_during_execution": true,
+        "parameters": {
+          "type": "object",
+          "required": [
+            "spoken_address"
+          ],
+          "properties": {
+            "spoken_address": {
+              "type": "string",
+              "description": "The service location address as spoken by the caller"
+            }
+          }
+        }
+      },
+      {
+        "headers": {},
+        "parameter_type": "form",
+        "execution_message_type": "prompt",
+        "method": "POST",
+        "query_params": {},
+        "description": "Confirms which customer from a multiple_matches result. Writes matchedCustomerId to the session.",
+        "enable_typing_sound": false,
+        "type": "custom",
+        "url": "https://crm-appointment-scheduler.vercel.app/api/buildops/fn/confirm_customer",
+        "args_at_root": true,
+        "timeout_ms": 5000,
+        "speak_after_execution": true,
+        "name": "confirm_customer",
+        "response_variables": {
+          "customer_address": "$.customer_address",
+          "property_count": "$.property_count",
+          "customer_addressSource": "$.customer.addressSource",
+          "customer_name": "$.customer_name",
+          "customer_id": "$.customer.id",
+          "property_id": "$.property_id",
+          "status": "$.status"
+        },
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "required": [
+            "candidate_id"
+          ],
+          "properties": {
+            "candidate_id": {
+              "type": "string",
+              "description": "The id from the chosen candidate in the candidates array"
+            }
+          }
+        }
+      },
+      {
+        "headers": {},
+        "parameter_type": "form",
+        "execution_message_type": "static_text",
+        "method": "POST",
+        "query_params": {},
+        "description": "Searches for a customer by name, address, zip, or a previously used phone number. Returns found, multiple_matches, or not_found.",
+        "enable_typing_sound": false,
+        "type": "custom",
+        "url": "https://crm-appointment-scheduler.vercel.app/api/buildops/fn/lookup_customer_fuzzy",
+        "args_at_root": true,
+        "execution_message_description": "Let me look at that for you",
+        "timeout_ms": 8000,
+        "speak_after_execution": true,
+        "name": "lookup_customer_fuzzy",
+        "response_variables": {
+          "candidates": "$.candidates",
+          "property_count": "$.property_count",
+          "identified": "$.identified",
+          "new_number_detected": "$.new_number_detected",
+          "requires_review": "$.requires_review",
+          "customer_name": "$.customer_name",
+          "confidence_tier": "$.confidence_tier",
+          "customer_id": "$.customer_id",
+          "address": "$.address",
+          "addressSource": "$.addressSource",
+          "message": "$.message",
+          "property_id": "$.property_id",
+          "status": "$.status"
+        },
+        "speak_during_execution": true,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Company or customer name as spoken"
+            },
+            "zip": {
+              "type": "string",
+              "description": "ZIP code as spoken"
+            },
+            "property_address": {
+              "type": "string",
+              "description": "Service location address as spoken"
+            },
+            "address": {
+              "type": "string",
+              "description": "Billing/mailing address as spoken"
+            },
+            "old_phone": {
+              "type": "string",
+              "description": "A previously used phone number the caller provides"
+            }
+          }
+        }
+      }
+    ],
+    "start_speaker": "agent",
+    "begin_message": "Thanks for calling Crockett Facilities Services, this is Clara — how may I help you?",
+    "knowledge_base_ids": [],
+    "kb_config": {
+      "top_k": 3,
+      "filter_score": 0.6
+    },
+    "last_modification_timestamp": 1778856088557,
+    "is_published": false
   }
-]
+}
