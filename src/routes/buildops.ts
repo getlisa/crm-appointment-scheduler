@@ -175,7 +175,7 @@ router.post('/retell/webhook', async (req, res) => {
       const callId = body.call?.call_id ?? '';
       const toNumber = body.call?.to_number ?? '';
       const fromNumber = body.call?.from_number ?? '';
-      console.log('[buildops] call_started', { callId, fromNumber, toNumber });
+      console.log('[buildops] call_started req', { callId, fromNumber, toNumber });
 
       if (callId && fromNumber && toNumber) {
         const resolution = await resolveByInboundNumber(toNumber);
@@ -191,6 +191,7 @@ router.post('/retell/webhook', async (req, res) => {
           }
         }
       }
+      console.log('[buildops] call_started resp', { ok: true });
       res.json({ ok: true });
       return;
     }
@@ -199,14 +200,16 @@ router.post('/retell/webhook', async (req, res) => {
       const toNumber = body.call_inbound?.to_number ?? '';
       const fromNumber = body.call_inbound?.from_number ?? '';
       const callId = body.call?.call_id || crypto.randomUUID();
-      console.log('[buildops] call_inbound', { callId, fromNumber, toNumber });
+      console.log('[buildops] call_inbound req', { callId, fromNumber, toNumber, agentId: body.call_inbound?.agent_id });
 
       const resolution = await resolveByInboundNumber(toNumber);
       console.log('[buildops] call_inbound tenant resolved', { toNumber, resolved: !!resolution, tenantId: resolution?.buildops_tenant_id });
 
       if (!resolution) {
         console.error(`[buildops] unknown inbound number: ${toNumber}`);
-        res.json(buildInboundResponse('error', fromNumber));
+        const errorResp = buildInboundResponse('error', fromNumber);
+        console.log('[buildops] call_inbound resp', errorResp);
+        res.json(errorResp);
         return;
       }
 
@@ -224,8 +227,9 @@ router.post('/retell/webhook', async (req, res) => {
       console.log('[buildops] phone lookup', { phoneLast10, matchCount: matches.length });
 
       if (matches.length === 0) {
-        console.log('[buildops] call_inbound response', { status: 'not_found' });
-        res.json(buildInboundResponse('not_found', fromNumber));
+        const notFoundResp = buildInboundResponse('not_found', fromNumber);
+        console.log('[buildops] call_inbound resp', notFoundResp);
+        res.json(notFoundResp);
         return;
       }
 
@@ -234,8 +238,7 @@ router.post('/retell/webhook', async (req, res) => {
         const customer = matches[0];
         const properties = await getPropertiesByIds(customer.propertyIds);
         const primary = pickPrimaryAddress(customer, properties);
-        console.log('[buildops] call_inbound response', { status: 'found', customerId: customer.id, customerName: customer.name, propertyCount: properties.length });
-        res.json({
+        const foundResp = {
           call_inbound: {
             override_agent_id: env.retellLlmId ?? undefined,
             dynamic_variables: {
@@ -253,12 +256,13 @@ router.post('/retell/webhook', async (req, res) => {
               property_id: properties.length === 1 ? properties[0].id : '',
             },
           },
-        });
+        };
+        console.log('[buildops] call_inbound resp', foundResp);
+        res.json(foundResp);
         return;
       }
 
-      console.log('[buildops] call_inbound response', { status: 'multiple_matches', matchCount: matches.length });
-      res.json({
+      const multiResp = {
         call_inbound: {
           override_agent_id: env.retellLlmId ?? undefined,
           dynamic_variables: {
@@ -281,7 +285,9 @@ router.post('/retell/webhook', async (req, res) => {
             candidates_count: String(matches.length),
           },
         },
-      });
+      };
+      console.log('[buildops] call_inbound resp', multiResp);
+      res.json(multiResp);
       return;
     }
 
@@ -291,7 +297,7 @@ router.post('/retell/webhook', async (req, res) => {
       const toNumber = body.call?.to_number ?? '';
       const disconnectionReason = (body.call as Record<string, unknown> | undefined)?.disconnection_reason as string | undefined;
       const newStatus = (disconnectionReason ?? 'ended') as InboundCallStatus;
-      console.log('[buildops] call_ended', { callId, fromNumber, toNumber, disconnectionReason, newStatus });
+      console.log('[buildops] call_ended req', { callId, fromNumber, toNumber, disconnectionReason, newStatus });
       if (callId) {
         await setCallStatus(callId, newStatus).catch(() => undefined);
       } else if (fromNumber && toNumber) {
@@ -301,6 +307,7 @@ router.post('/retell/webhook', async (req, res) => {
           if (session) await setCallStatus(session.retellCallId, newStatus).catch(() => undefined);
         }
       }
+      console.log('[buildops] call_ended resp', { ok: true });
       res.json({ ok: true });
       return;
     }
@@ -326,11 +333,16 @@ router.post('/fn/lookup_customer_fuzzy', async (req, res) => {
     const callId = call?.call_id as string | undefined;
     const fromNumber = call?.from_number as string | undefined;
     const toNumber = call?.to_number as string | undefined;
-    console.log('[buildops] fn/lookup_customer_fuzzy called', { callId, fromNumber, toNumber });
     const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
+    console.log('[buildops] fn/lookup_customer_fuzzy req', { callId, fromNumber, toNumber, args });
     const resolved = await resolveSession(callId, fromNumber, toNumber);
-    if (!resolved) { res.json({ result: 'error: session not found' }); return; }
-    res.json(await handleLookupFuzzy(resolved.session, args));
+    if (!resolved) {
+      console.log('[buildops] fn/lookup_customer_fuzzy resp', { result: 'error: session not found' });
+      res.json({ result: 'error: session not found' }); return;
+    }
+    const result = await handleLookupFuzzy(resolved.session, args);
+    console.log('[buildops] fn/lookup_customer_fuzzy resp', { callId, result: result.result });
+    res.json(result);
   } catch (err) {
     logBuildopsException('[buildops] fn/lookup_customer_fuzzy', err);
     res.json({ result: 'error: internal' });
@@ -349,11 +361,16 @@ router.post('/fn/confirm_customer', async (req, res) => {
     const callId = call?.call_id as string | undefined;
     const fromNumber = call?.from_number as string | undefined;
     const toNumber = call?.to_number as string | undefined;
-    console.log('[buildops] fn/confirm_customer called', { callId, fromNumber, toNumber });
     const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
+    console.log('[buildops] fn/confirm_customer req', { callId, fromNumber, toNumber, args });
     const resolved = await resolveSession(callId, fromNumber, toNumber);
-    if (!resolved) { res.json({ result: 'error: session not found' }); return; }
-    res.json(await handleConfirmCustomer(resolved.session, args));
+    if (!resolved) {
+      console.log('[buildops] fn/confirm_customer resp', { result: 'error: session not found' });
+      res.json({ result: 'error: session not found' }); return;
+    }
+    const result = await handleConfirmCustomer(resolved.session, args);
+    console.log('[buildops] fn/confirm_customer resp', { callId, result: result.result });
+    res.json(result);
   } catch (err) {
     logBuildopsException('[buildops] fn/confirm_customer', err);
     res.json({ result: 'error: internal' });
@@ -372,11 +389,16 @@ router.post('/fn/match_property', async (req, res) => {
     const callId = call?.call_id as string | undefined;
     const fromNumber = call?.from_number as string | undefined;
     const toNumber = call?.to_number as string | undefined;
-    console.log('[buildops] fn/match_property called', { callId, fromNumber, toNumber });
     const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
+    console.log('[buildops] fn/match_property req', { callId, fromNumber, toNumber, args });
     const resolved = await resolveSession(callId, fromNumber, toNumber);
-    if (!resolved) { res.json({ result: 'error: session not found' }); return; }
-    res.json(await handleMatchProperty(resolved.session, args));
+    if (!resolved) {
+      console.log('[buildops] fn/match_property resp', { result: 'error: session not found' });
+      res.json({ result: 'error: session not found' }); return;
+    }
+    const result = await handleMatchProperty(resolved.session, args);
+    console.log('[buildops] fn/match_property resp', { callId, result: result.result });
+    res.json(result);
   } catch (err) {
     logBuildopsException('[buildops] fn/match_property', err);
     res.json({ result: 'error: internal' });
@@ -385,7 +407,7 @@ router.post('/fn/match_property', async (req, res) => {
 
 /**
  * POST /api/buildops/fn/prepare_job
- * @body { call: { call_id }, args: { customer_property_id, status?, needs_review?, tasks? } }
+ * @body { call: { call_id }, args: { customer_property_id, status?, needs_review?, issue_description? } }
  * @returns { result: string } — JSON: status created (job_id, job_number) | blocked (reason, message)
  */
 router.post('/fn/prepare_job', async (req, res) => {
@@ -395,11 +417,16 @@ router.post('/fn/prepare_job', async (req, res) => {
     const callId = call?.call_id as string | undefined;
     const fromNumber = call?.from_number as string | undefined;
     const toNumber = call?.to_number as string | undefined;
-    console.log('[buildops] fn/prepare_job called', { callId, fromNumber, toNumber });
     const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
+    console.log('[buildops] fn/prepare_job req', { callId, fromNumber, toNumber, args });
     const resolved = await resolveSession(callId, fromNumber, toNumber);
-    if (!resolved) { res.json({ result: 'error: session not found' }); return; }
-    res.json(await handlePrepareJob(resolved.session, resolved.ctx, args));
+    if (!resolved) {
+      console.log('[buildops] fn/prepare_job resp', { result: 'error: session not found' });
+      res.json({ result: 'error: session not found' }); return;
+    }
+    const result = await handlePrepareJob(resolved.session, resolved.ctx, args);
+    console.log('[buildops] fn/prepare_job resp', { callId, result: result.result });
+    res.json(result);
   } catch (err) {
     logBuildopsException('[buildops] fn/prepare_job', err);
     res.json({ result: 'error: internal' });
@@ -418,11 +445,16 @@ router.post('/fn/add_representative', async (req, res) => {
     const callId = call?.call_id as string | undefined;
     const fromNumber = call?.from_number as string | undefined;
     const toNumber = call?.to_number as string | undefined;
-    console.log('[buildops] fn/add_representative called', { callId, fromNumber, toNumber });
     const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
+    console.log('[buildops] fn/add_representative req', { callId, fromNumber, toNumber, args });
     const resolved = await resolveSession(callId, fromNumber, toNumber);
-    if (!resolved) { res.json({ result: 'error: session not found' }); return; }
-    res.json(await handleAddRepresentative(resolved.session, resolved.ctx, args));
+    if (!resolved) {
+      console.log('[buildops] fn/add_representative resp', { result: 'error: session not found' });
+      res.json({ result: 'error: session not found' }); return;
+    }
+    const result = await handleAddRepresentative(resolved.session, resolved.ctx, args);
+    console.log('[buildops] fn/add_representative resp', { callId, result: result.result });
+    res.json(result);
   } catch (err) {
     logBuildopsException('[buildops] fn/add_representative', err);
     res.json({ result: 'error: internal' });

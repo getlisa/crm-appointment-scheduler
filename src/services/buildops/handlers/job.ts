@@ -5,7 +5,7 @@
  * and writes it to buildops_jobs — all during the call before returning to Retell.
  */
 
-import { createJob, createTask, getCustomer } from '../client.js';
+import { createJob, getCustomer } from '../client.js';
 import { getCustomerById } from '../db/customers.js';
 import { getPropertyById } from '../db/properties.js';
 import { setJobCreated } from '../db/inbound-calls.js';
@@ -17,9 +17,7 @@ import type {
   InboundCallRow,
   RetellFunctionResult,
   JobStatus,
-  TaskEntry,
   PendingJobData,
-  PendingTaskData,
 } from '../types.js';
 
 const DEFAULT_JOB_TYPE_ID    = '04df1a40-16b1-43f4-aa9b-8eafcec812ad';
@@ -96,10 +94,6 @@ export async function executeJobCreation(
     issueDescription: data.issueDescription,
   });
 
-  for (const task of data.tasks) {
-    await createTask(ctx, jobResult.jobId, task.name, task.entries);
-  }
-
   return jobResult;
 }
 
@@ -128,7 +122,6 @@ export async function handlePrepareJob(
     return { result: 'error: no customer confirmed — complete customer lookup first' };
   }
   const rawStatus = (args.status as string | undefined) ?? 'Open';
-  const rawTasks   = (args.tasks as unknown[] | undefined) ?? [];
   const needsReview = !!(args.needs_review);
   const rawIssueDescription = (args.issue_description as string | undefined)?.trim() ?? '';
   const issueDescription = rawIssueDescription
@@ -174,19 +167,6 @@ export async function handlePrepareJob(
     return { result: 'error: property not found or does not belong to this customer' };
   }
 
-  const tasks: PendingTaskData[] = rawTasks.map((t: unknown) => {
-    const task = t as Record<string, unknown>;
-    const entries: TaskEntry[] = ((task.entries as unknown[]) ?? []).map((e: unknown) => {
-      const entry = e as Record<string, unknown>;
-      return {
-        productId: entry.product_id as string,
-        description: entry.description as string | undefined,
-        quantity: Number(entry.quantity ?? 1),
-      };
-    });
-    return { name: task.name as string, entries };
-  });
-
   const pendingJob: PendingJobData = {
     customerPropertyId,
     jobTypeId: DEFAULT_JOB_TYPE_ID,
@@ -196,7 +176,6 @@ export async function handlePrepareJob(
     propertyAddress: property.address,
     needsReview,
     departmentId: DEFAULT_DEPARTMENT_ID,
-    tasks,
     issueDescription,
   };
 
@@ -217,7 +196,6 @@ export async function handlePrepareJob(
         summary: {
           property_address: property.address,
           job_status: status,
-          task_count: tasks.length,
         },
       }),
     };
@@ -228,51 +206,3 @@ export async function handlePrepareJob(
   }
 }
 
-// ── Keep add_task_to_job for any direct task operations (admin/testing) ───────
-
-/**
- * Adds a task line item to an existing BuildOps job.
- * Primarily used for admin/testing — during normal calls tasks are passed to prepare_job.
- *
- * @param _session - Call session (unused but required by the function dispatch signature)
- * @param ctx      - BuildOps API context
- * @param args     - Must include job_id, name, and entries array
- * @returns RetellFunctionResult — status: task_added | error
- */
-export async function handleAddTaskToJob(
-  _session: InboundCallRow,
-  ctx: BuildOpsContext,
-  args: Record<string, unknown>,
-): Promise<RetellFunctionResult> {
-  const jobId = args.job_id as string | undefined;
-  const name = args.name as string | undefined;
-  const rawEntries = args.entries as unknown[] | undefined;
-
-  if (!jobId || !name || !rawEntries?.length) {
-    return { result: 'error: job_id, name, and entries are required' };
-  }
-
-  const entries: TaskEntry[] = rawEntries.map((e: unknown) => {
-    const entry = e as Record<string, unknown>;
-    return {
-      productId: entry.product_id as string,
-      description: entry.description as string | undefined,
-      quantity: Number(entry.quantity ?? 1),
-    };
-  });
-
-  try {
-    await createTask(ctx, jobId, name, entries);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { result: `error: task creation failed — ${msg}` };
-  }
-
-  return {
-    result: JSON.stringify({
-      status: 'task_added',
-      job_id: jobId,
-      task_name: name,
-    }),
-  };
-}

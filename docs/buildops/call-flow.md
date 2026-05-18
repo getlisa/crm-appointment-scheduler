@@ -10,15 +10,31 @@ Implementation: [`src/routes/buildops.ts`](../../src/routes/buildops.ts)
 
 ## Webhook Lifecycle Events
 
-### 1. `call_inbound` / `call_started`
+### 1. `call_inbound`
 
-Fires at the moment a call arrives. Handler: `retell/index.ts`.
+Fires before the call is answered. Handler: `POST /api/buildops/retell/webhook`.
+
+**Payload received:**
+
+```json
+{
+  "event": "call_inbound",
+  "call": { "call_id": "<uuid or empty>" },
+  "call_inbound": {
+    "from_number": "+1XXXXXXXXXX",
+    "to_number": "+1XXXXXXXXXX",
+    "agent_id": "<retell-agent-id>"
+  }
+}
+```
+
+> `call.call_id` may be absent at this stage. If missing, a `crypto.randomUUID()` is generated and used as a temporary session ID — it will be swapped for the real Retell call ID on `call_started`.
 
 **Steps:**
-1. Look up tenant by dialed `to_number` → `resolveByInboundNumber()` → `buildops_tenants`
+1. Look up tenant by `call_inbound.to_number` → `resolveByInboundNumber()` → `buildops_tenants`
    - If no row found: return `status: error` dynamic variables (call still proceeds, agent uses fallback prompt)
 2. Insert row into `buildops_inbound_calls` (`status = 'active'`)
-3. Normalize `from_number` to last-10 digits → `findCustomersByPhone()`
+3. Normalize `call_inbound.from_number` to last-10 digits → `findCustomersByPhone()`
 
 **Phone lookup outcomes** (set as Retell dynamic variables):
 
@@ -34,23 +50,53 @@ When `found` and `property_count = 1`: `property_id` is populated so the agent c
 
 ---
 
-### 2. Custom Function Calls During the Call
+### 2. `call_started`
 
-Each Retell custom function has its own dedicated endpoint under `/api/buildops/fn/`. Retell calls the endpoint directly; no dispatcher — the endpoint resolves the call session, looks up tenant credentials, and delegates to the handler in `src/services/buildops/handlers/`.
+Fires once the call is live and Retell has assigned the real call ID. Handler: `POST /api/buildops/retell/webhook`.
 
-| Function name | Endpoint (path) | Full Retell webhook URL | Handler | Purpose |
-|---|---|---|---|---|
-| `lookup_customer_fuzzy` | `POST /api/buildops/fn/lookup_customer_fuzzy` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/lookup_customer_fuzzy` | `handleLookupFuzzy` | Name/address/zip fuzzy search |
-| `confirm_customer` | `POST /api/buildops/fn/confirm_customer` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/confirm_customer` | `handleConfirmCustomer` | Confirm which candidate from `multiple_matches` |
-| `match_property` | `POST /api/buildops/fn/match_property` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/match_property` | `handleMatchProperty` | Fuzzy-match spoken address to a property |
-| `prepare_job` | `POST /api/buildops/fn/prepare_job` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/prepare_job` | `handlePrepareJob` | Validate + create job in BuildOps (during the call) |
-| `add_representative` | `POST /api/buildops/fn/add_representative` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/add_representative` | `handleAddRepresentative` | Create new named contact on the account |
+**Payload received:**
+
+```json
+{
+  "event": "call_started",
+  "call": {
+    "call_id": "<real-retell-call-id>",
+    "from_number": "+1XXXXXXXXXX",
+    "to_number": "+1XXXXXXXXXX"
+  }
+}
+```
+
+**Steps:**
+1. Look up tenant by `call.to_number`
+2. Find the active session by `(tenantId, from_number)` — this session was created with the temporary UUID during `call_inbound`
+3. If `session.retellCallId !== call.call_id`: swap the temporary UUID for the real Retell call ID in `buildops_inbound_calls` (`updateRetellCallId`)
+
+> **Critical**: if `swapped: false` is logged here, all subsequent custom function calls will fail with "session not found" because they look up sessions by `call_id`.
 
 ---
 
 ### 3. `call_ended`
 
-Writes `disconnection_reason` from the Retell payload as the session status. **No job creation happens here** — jobs are created during the call via `prepare_job`.
+Fires when the call disconnects. Handler: `POST /api/buildops/retell/webhook`.
+
+**Payload received:**
+
+```json
+{
+  "event": "call_ended",
+  "call": {
+    "call_id": "<retell-call-id>",
+    "from_number": "+1XXXXXXXXXX",
+    "to_number": "+1XXXXXXXXXX",
+    "disconnection_reason": "user_hangup"
+  }
+}
+```
+
+**Steps:**
+1. If `call.call_id` is present: write `disconnection_reason` as `buildops_inbound_calls.status` directly
+2. If `call_id` is absent (fallback): look up tenant by `to_number` → find active session by phone → update status
 
 Retell `disconnection_reason` values written directly as `buildops_inbound_calls.status`:
 
@@ -70,6 +116,20 @@ Retell `disconnection_reason` values written directly as `buildops_inbound_calls
 | `error_inbound_webhook` | Webhook error |
 
 Falls back to `'ended'` if `disconnection_reason` is absent.
+
+---
+
+### 4. Custom Function Calls During the Call
+
+Each Retell custom function has its own dedicated endpoint under `/api/buildops/fn/`. Retell calls the endpoint directly; no dispatcher — the endpoint resolves the call session, looks up tenant credentials, and delegates to the handler in `src/services/buildops/handlers/`.
+
+| Function name | Endpoint (path) | Full Retell webhook URL | Handler | Purpose |
+|---|---|---|---|---|
+| `lookup_customer_fuzzy` | `POST /api/buildops/fn/lookup_customer_fuzzy` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/lookup_customer_fuzzy` | `handleLookupFuzzy` | Name/address/zip fuzzy search |
+| `confirm_customer` | `POST /api/buildops/fn/confirm_customer` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/confirm_customer` | `handleConfirmCustomer` | Confirm which candidate from `multiple_matches` |
+| `match_property` | `POST /api/buildops/fn/match_property` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/match_property` | `handleMatchProperty` | Fuzzy-match spoken address to a property |
+| `prepare_job` | `POST /api/buildops/fn/prepare_job` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/prepare_job` | `handlePrepareJob` | Validate + create job in BuildOps (during the call) |
+| `add_representative` | `POST /api/buildops/fn/add_representative` | `https://crm-appointment-scheduler.vercel.app/api/buildops/fn/add_representative` | `handleAddRepresentative` | Create new named contact on the account |
 
 ---
 
@@ -159,6 +219,27 @@ Searches for a customer by name, address, zip, or a previously used phone number
 | Timeout | 8000 ms |
 | speak_during_execution | `true` ("Let me look that up for you.") |
 
+**Payload received:**
+
+```json
+{
+  "call": {
+    "call_id": "<retell-call-id>",
+    "from_number": "+1XXXXXXXXXX",
+    "to_number": "+1XXXXXXXXXX"
+  },
+  "arguments": {
+    "name": "Acme Plumbing",
+    "address": "123 Main St",
+    "property_address": "456 Oak Ave",
+    "zip": "90210",
+    "old_phone": "+1XXXXXXXXXX"
+  }
+}
+```
+
+> `arguments` may be absent (falls back to root body). At least one of the search fields must be provided. All fields are optional individually.
+
 **Parameters:**
 
 | Field | Type | Required | Description |
@@ -201,6 +282,21 @@ Confirms which customer from a `multiple_matches` result. Writes `matchedCustome
 | Timeout | 5000 ms |
 | speak_during_execution | `false` |
 
+**Payload received:**
+
+```json
+{
+  "call": {
+    "call_id": "<retell-call-id>",
+    "from_number": "+1XXXXXXXXXX",
+    "to_number": "+1XXXXXXXXXX"
+  },
+  "arguments": {
+    "candidate_id": "<buildops-customer-uuid>"
+  }
+}
+```
+
 **Parameters:**
 
 | Field | Type | Required | Description |
@@ -230,6 +326,21 @@ Fuzzy-matches a spoken service address against the confirmed customer's properti
 | Timeout | 6000 ms |
 | speak_during_execution | `true` ("Let me find that address.") |
 
+**Payload received:**
+
+```json
+{
+  "call": {
+    "call_id": "<retell-call-id>",
+    "from_number": "+1XXXXXXXXXX",
+    "to_number": "+1XXXXXXXXXX"
+  },
+  "arguments": {
+    "spoken_address": "123 Oak Street"
+  }
+}
+```
+
 **Parameters:**
 
 | Field | Type | Required | Description |
@@ -253,12 +364,32 @@ Scores ≥ 0.60 → `matched`. Scores where top-2 gap < 0.15 → `ambiguous`. Be
 
 ### `prepare_job`
 
-Validates the account, creates the job in BuildOps, writes it to `buildops_jobs`, and creates any task line items — all during the call before returning to Retell.
+Validates the account, creates the job in BuildOps, and writes it to `buildops_jobs` — all during the call before returning to Retell.
 
 | Retell setting | Value |
 |---|---|
 | Timeout | 5000 ms |
 | speak_during_execution | `false` |
+
+**Payload received:**
+
+```json
+{
+  "call": {
+    "call_id": "<retell-call-id>",
+    "from_number": "+1XXXXXXXXXX",
+    "to_number": "+1XXXXXXXXXX"
+  },
+  "arguments": {
+    "customer_property_id": "<buildops-property-uuid>",
+    "status": "Open",
+    "needs_review": false,
+    "issue_description": "HVAC unit not cooling"
+  }
+}
+```
+
+> `issue_description` is prefixed with `[Job Created by Clara]\n` before being written to BuildOps.
 
 **Parameters:**
 
@@ -267,17 +398,7 @@ Validates the account, creates the job in BuildOps, writes it to `buildops_jobs`
 | `customer_property_id` | string | Yes | BuildOps property UUID (from `match_property` or `property_id` auto-set) |
 | `status` | string | No | Initial job status: `Open`, `In Progress`, `On Hold`, `Canceled`, `Complete`. Defaults to `Open` |
 | `needs_review` | boolean | No | Set `true` when `confidence_tier = 2` (flags job for manual review) |
-| `tasks` | array | No | Task line items (see below) |
-
-**`tasks[]` sub-fields:**
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `tasks[].name` | string | Yes | Task display name shown on the work order |
-| `tasks[].entries[]` | array | Yes | Line items |
-| `tasks[].entries[].product_id` | string | Yes | BuildOps product UUID |
-| `tasks[].entries[].description` | string | No | Line item description override |
-| `tasks[].entries[].quantity` | number | No | Defaults to `1` |
+| `issue_description` | string | No | Caller's description of the issue |
 
 **Pre-checks (in order):**
 1. `matchedCustomerId` present in session — error if not
@@ -306,7 +427,6 @@ Validates the account, creates the job in BuildOps, writes it to `buildops_jobs`
 | `needs_review` | `$.needs_review` | Echoed back |
 | `property_address` | `$.summary.property_address` | Address read back to caller |
 | `job_status` | `$.summary.job_status` | Echoed status |
-| `task_count` | `$.summary.task_count` | Number of tasks created |
 
 **Response variables (blocked):**
 
@@ -330,6 +450,26 @@ Creates a new named contact/representative on the BuildOps account and appends t
 |---|---|
 | Timeout | 5000 ms |
 | speak_during_execution | `false` |
+
+**Payload received:**
+
+```json
+{
+  "call": {
+    "call_id": "<retell-call-id>",
+    "from_number": "+1XXXXXXXXXX",
+    "to_number": "+1XXXXXXXXXX"
+  },
+  "arguments": {
+    "first_name": "Jane",
+    "last_name": "Smith",
+    "email": "jane@example.com",
+    "property_id": "<buildops-property-uuid>"
+  }
+}
+```
+
+> Phone is never passed in `arguments` — it is always taken from `session.caller` (`from_number`).
 
 **Parameters:**
 

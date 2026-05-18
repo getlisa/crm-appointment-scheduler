@@ -9,7 +9,6 @@ import type {
   BuildOpsContext,
   BuildOpsJobResponse,
   CreateJobInput,
-  TaskEntry,
   PropertyRow,
   AddressObj,
 } from './types.js';
@@ -137,23 +136,6 @@ export async function createJobTag(
   tagData: unknown,
 ): Promise<void> {
   await request(ctx, 'POST', `/v1/jobs/${jobId}/tags`, tagData);
-}
-
-/**
- * Creates a task (line item group) on an existing job.
- *
- * @param ctx     - BuildOps API context
- * @param jobId   - BuildOps job UUID
- * @param name    - Task display name shown on the work order
- * @param entries - Array of product line items with productId and optional quantity/description
- */
-export async function createTask(
-  ctx: BuildOpsContext,
-  jobId: string,
-  name: string,
-  entries: TaskEntry[],
-): Promise<void> {
-  await request(ctx, 'POST', `/v1/jobs/${jobId}/tasks`, { name, entries });
 }
 
 // ── Customers ─────────────────────────────────────────────────────────────────
