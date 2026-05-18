@@ -193,11 +193,6 @@ export type LookupDecision =
 
 export type JobStatus = 'Open' | 'In Progress' | 'On Hold' | 'Canceled' | 'Complete';
 
-export interface PendingTaskData {
-  name: string;
-  entries: TaskEntry[];
-}
-
 export interface PendingJobData {
   customerPropertyId: string;
   jobTypeId: string;
@@ -207,7 +202,6 @@ export interface PendingJobData {
   propertyAddress?: AddressObj;
   needsReview?: boolean;
   departmentId?: string | null;
-  tasks: PendingTaskData[];
   issueDescription?: string;
 }
 
@@ -220,12 +214,6 @@ export interface CreateJobInput {
   status: JobStatus;
   departmentIds?: string[] | null;
   issueDescription?: string;
-}
-
-export interface TaskEntry {
-  productId: string;
-  description?: string;
-  quantity: number;
 }
 
 export interface BuildOpsJobResponse {

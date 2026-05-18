@@ -385,7 +385,7 @@ router.post('/fn/match_property', async (req, res) => {
 
 /**
  * POST /api/buildops/fn/prepare_job
- * @body { call: { call_id }, args: { customer_property_id, status?, needs_review?, tasks? } }
+ * @body { call: { call_id }, args: { customer_property_id, status?, needs_review?, issue_description? } }
  * @returns { result: string } — JSON: status created (job_id, job_number) | blocked (reason, message)
  */
 router.post('/fn/prepare_job', async (req, res) => {
