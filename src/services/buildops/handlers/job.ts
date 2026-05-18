@@ -22,8 +22,10 @@ import type {
   PendingTaskData,
 } from '../types.js';
 
-const DEFAULT_JOB_TYPE_ID = '04df1a40-16b1-43f4-aa9b-8eafcec812ad';
-const DEFAULT_DEPARTMENT_ID = 'd87c1a38-4acd-459f-9b3f-446a810fae10';
+const DEFAULT_JOB_TYPE_ID    = '04df1a40-16b1-43f4-aa9b-8eafcec812ad';
+const DEFAULT_JOB_TYPE_NAME  = 'Time & Material';
+const DEFAULT_DEPARTMENT_ID  = 'd87c1a38-4acd-459f-9b3f-446a810fae10';
+const DEFAULT_DEPARTMENT_NAME = 'D2 Service Calls (T&M)';
 
 const ALLOWED_STATUSES: JobStatus[] = ['Open', 'In Progress', 'On Hold', 'Canceled', 'Complete'];
 
@@ -72,6 +74,7 @@ export async function executeJobCreation(
     isUseTaxable: data.isUseTaxable,
     status: data.status,
     departmentIds: data.departmentId ? [data.departmentId] : null,
+    issueDescription: data.issueDescription,
   });
 
   await setJobCreated(session.retellCallId, jobResult.jobId);
@@ -82,9 +85,15 @@ export async function executeJobCreation(
     status: data.status,
     customerPropertyId: data.customerPropertyId,
     customerId: customer.buildopsCustomerId,
+    customerName: jobResult.customerName ?? customer.name,
+    jobTypeName: jobResult.jobTypeName ?? DEFAULT_JOB_TYPE_NAME,
     jobTypeId: data.jobTypeId,
     priceBookId: data.priceBookId,
     isUseTaxable: data.isUseTaxable,
+    departments: jobResult.departments.length > 0
+      ? jobResult.departments
+      : data.departmentId ? [{ id: data.departmentId, name: DEFAULT_DEPARTMENT_NAME }] : [],
+    issueDescription: data.issueDescription,
   });
 
   for (const task of data.tasks) {
@@ -120,6 +129,10 @@ export async function handlePrepareJob(
   const rawStatus = (args.status as string | undefined) ?? 'Open';
   const rawTasks   = (args.tasks as unknown[] | undefined) ?? [];
   const needsReview = !!(args.needs_review);
+  const rawIssueDescription = (args.issue_description as string | undefined)?.trim() ?? '';
+  const issueDescription = rawIssueDescription
+    ? `[Job Created by Clara]\n${rawIssueDescription}`
+    : '[Job Created by Clara]';
 
   if (!customerPropertyId) {
     return { result: 'error: customer_property_id is required' };
@@ -181,6 +194,7 @@ export async function handlePrepareJob(
     needsReview,
     departmentId: DEFAULT_DEPARTMENT_ID,
     tasks,
+    issueDescription,
   };
 
   // Resolve a fresh context if the passed ctx may have a stale token

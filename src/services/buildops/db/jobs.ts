@@ -41,7 +41,6 @@ function mapRow(row: Record<string, unknown>): JobRow {
     serviceAgreementId: row.service_agreement_id as string | null,
     completedDate: row.completed_date as number | null,
     isDeleted: (row.is_deleted as boolean) ?? false,
-    audit: row.audit as Record<string, unknown> | null,
   };
 }
 
@@ -84,7 +83,6 @@ export async function upsertJob(tenantId: string, jobData: {
   serviceAgreementId?: string;
   completedDate?: number;
   isDeleted?: boolean;
-  audit?: Record<string, unknown>;
 }): Promise<void> {
   await supabase.from('buildops_jobs').upsert({
     tenant_id: tenantId,
@@ -118,7 +116,6 @@ export async function upsertJob(tenantId: string, jobData: {
     service_agreement_id: jobData.serviceAgreementId ?? null,
     completed_date: jobData.completedDate ?? null,
     is_deleted: jobData.isDeleted ?? false,
-    audit: jobData.audit ?? null,
   }, { onConflict: 'tenant_id,job_id' });
 }
 

@@ -139,7 +139,6 @@ export interface JobRow {
   serviceAgreementId: string | null;
   completedDate: number | null;
   isDeleted: boolean;
-  audit: Record<string, unknown> | null;
 }
 
 // ── Shared value types ────────────────────────────────────────────────────────
@@ -193,6 +192,7 @@ export interface PendingJobData {
   needsReview?: boolean;
   departmentId?: string | null;
   tasks: PendingTaskData[];
+  issueDescription?: string;
 }
 
 export interface CreateJobInput {
@@ -203,6 +203,7 @@ export interface CreateJobInput {
   isUseTaxable: boolean;
   status: JobStatus;
   departmentIds?: string[] | null;
+  issueDescription?: string;
 }
 
 export interface TaskEntry {
