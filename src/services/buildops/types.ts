@@ -151,7 +151,23 @@ export interface AddressObj {
   zip?: string;
 }
 
-export type InboundCallStatus = 'active' | 'job_created' | 'handed_off' | 'ended';
+export type InboundCallStatus =
+  | 'active'
+  | 'job_created'
+  | 'handed_off'
+  | 'ended'
+  | 'user_hangup'
+  | 'agent_hangup'
+  | 'call_transfer'
+  | 'voicemail_reached'
+  | 'inactivity'
+  | 'machine_detected'
+  | 'max_duration_reached'
+  | 'concurrency_limit_reached'
+  | 'dial_busy'
+  | 'dial_failed'
+  | 'dial_no_answer'
+  | 'error_inbound_webhook';
 
 // ── Fuzzy search ──────────────────────────────────────────────────────────────
 

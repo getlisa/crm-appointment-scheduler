@@ -29,6 +29,19 @@ export async function handleLookupFuzzy(
   session: InboundCallRow,
   args: Record<string, unknown>,
 ): Promise<RetellFunctionResult> {
+  if (session.matchedCustomerId) {
+    console.log('[buildops] lookup_customer_fuzzy blocked: caller already identified', {
+      retellCallId: session.retellCallId,
+      matchedCustomerId: session.matchedCustomerId,
+    });
+    return {
+      result: JSON.stringify({
+        status: 'error',
+        message: 'Caller already identified. Cannot look up a different account.',
+      }),
+    };
+  }
+
   const query: FuzzyQuery = {
     name: args.name as string | undefined,
     address: args.address as string | undefined,
@@ -42,6 +55,12 @@ export async function handleLookupFuzzy(
       result: 'need_more_info: please provide at least a name, zip code, or address to search',
     };
   }
+
+  console.log('[buildops] fuzzy lookup start', {
+    retellCallId: session.retellCallId,
+    tenantId: session.tenantId,
+    query,
+  });
 
   const candidates = await getFuzzyCandidates(session.tenantId, query);
 
@@ -113,11 +132,25 @@ export async function handleLookupFuzzy(
     }
   }
 
+  console.log('[buildops] fuzzy lookup scored', {
+    retellCallId: session.retellCallId,
+    candidateCount: candidates.length,
+    tier1Count: tier1.length,
+    tier2Count: tier2.length,
+  });
+
   // Shared accept path — stores matched customer and builds response
   const accept = async (
     r: (typeof rated)[0],
     confidenceTier: 1 | 2,
   ): Promise<RetellFunctionResult> => {
+    console.log('[buildops] fuzzy lookup accepted', {
+      retellCallId: session.retellCallId,
+      customerId: r.customer.id,
+      customerName: r.customer.name,
+      confidenceTier,
+      tierRule: r.tier.rule,
+    });
     await setMatchedCustomer(session.retellCallId, r.customer.id);
     const newNumberDetected = !!callerPhone && !r.customer.allNumbers.includes(callerPhone);
     const properties = await getPropertiesByIds(r.customer.propertyIds);
