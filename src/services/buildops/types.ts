@@ -87,7 +87,8 @@ export interface DepartmentRow {
 
 export interface InboundCallRow {
   id: string;
-  retellCallId: string;
+  sessionId: string;
+  retellCallId: string | null;
   tenantId: string;
   caller: string | null;
   matchedCustomerId: string | null;

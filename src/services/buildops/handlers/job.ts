@@ -75,7 +75,7 @@ export async function executeJobCreation(
     issueDescription: data.issueDescription,
   });
 
-  await setJobCreated(session.retellCallId, jobResult.jobId);
+  await setJobCreated(session.sessionId, jobResult.jobId);
 
   await upsertJob(session.tenantId, {
     jobId: jobResult.jobId,
@@ -116,7 +116,7 @@ export async function handlePrepareJob(
   args: Record<string, unknown>,
 ): Promise<RetellFunctionResult> {
   const customerPropertyId = args.customer_property_id as string | undefined;
-  console.log('[buildops] prepare_job start', { retellCallId: session.retellCallId, matchedCustomerId: session.matchedCustomerId, customerPropertyId });
+  console.log('[buildops] prepare_job start', { sessionId: session.sessionId, matchedCustomerId: session.matchedCustomerId, customerPropertyId });
 
   if (!session.matchedCustomerId) {
     return { result: 'error: no customer confirmed — complete customer lookup first' };
@@ -186,7 +186,7 @@ export async function handlePrepareJob(
 
   try {
     const jobResult = await executeJobCreation(session, activeCtx, pendingJob);
-    console.log('[buildops] prepare_job result', { status: 'created', jobId: jobResult.jobId, jobNumber: jobResult.jobNumber, retellCallId: session.retellCallId });
+    console.log('[buildops] prepare_job result', { status: 'created', jobId: jobResult.jobId, jobNumber: jobResult.jobNumber, sessionId: session.sessionId });
     return {
       result: JSON.stringify({
         status: 'created',
@@ -201,7 +201,7 @@ export async function handlePrepareJob(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[buildops] prepare_job error', { retellCallId: session.retellCallId, error: msg });
+    console.error('[buildops] prepare_job error', { sessionId: session.sessionId, error: msg });
     return { result: `error: job creation failed — ${msg}` };
   }
 }

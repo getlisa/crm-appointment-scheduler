@@ -1,7 +1,11 @@
 /**
  * Supabase queries for the buildops_inbound_calls table.
- * One row per Retell call. Created at call_started/call_inbound and updated
+ * One row per Retell call. Created at call_inbound and updated
  * throughout the call lifecycle (customer matched, job created, call ended/handed off).
+ *
+ * Column semantics:
+ *   session_id     — stable UUID assigned at call_inbound (internal session key)
+ *   retell_call_id — Retell's real call_id (call_xxx...), set at call_started
  */
 
 import { supabaseAdmin as supabase } from '../../../lib/supabase.js';
@@ -10,7 +14,8 @@ import type { InboundCallRow, InboundCallStatus } from '../types.js';
 function mapRow(row: Record<string, unknown>): InboundCallRow {
   return {
     id: row.id as string,
-    retellCallId: row.retell_call_id as string,
+    sessionId: row.session_id as string,
+    retellCallId: row.retell_call_id as string | null,
     tenantId: row.tenant_id as string,
     caller: row.caller as string | null,
     matchedCustomerId: row.matched_customer_id as string | null,
@@ -20,23 +25,21 @@ function mapRow(row: Record<string, unknown>): InboundCallRow {
 }
 
 /**
- * Creates a new inbound call session row at the start of every Retell call.
+ * Creates a new inbound call session row at call_inbound.
  *
- * @param params.retellCallId - Retell's unique call identifier (session key throughout the call)
- * @param params.tenantId     - BuildOps tenant UUID resolved from the dialed number
- * @param params.caller       - Caller's E.164 number (may be absent for private numbers)
- * @returns The newly created InboundCallRow
- * @throws If the insert fails
+ * @param params.sessionId - Stable UUID for this session (Retell's call_id from call_inbound)
+ * @param params.tenantId  - BuildOps tenant UUID resolved from the dialed number
+ * @param params.caller    - Caller's E.164 number (may be absent for private numbers)
  */
 export async function createInboundCall(params: {
-  retellCallId: string;
+  sessionId: string;
   tenantId?: string;
   caller?: string;
 }): Promise<InboundCallRow> {
   const { data, error } = await supabase
     .from('buildops_inbound_calls')
     .insert({
-      retell_call_id: params.retellCallId,
+      session_id: params.sessionId,
       tenant_id: params.tenantId ?? null,
       caller: params.caller ?? null,
       status: 'active',
@@ -49,11 +52,11 @@ export async function createInboundCall(params: {
 }
 
 /**
- * Fetches the call session row by Retell call ID.
+ * Fetches the call session row by Retell's real call_id (set at call_started).
  * Called at the start of every function-call dispatch to get the current session state.
  *
- * @param retellCallId - Retell call identifier from the webhook payload
- * @returns The InboundCallRow, or null if the session was never created
+ * @param retellCallId - Retell's real call_id from the function-call envelope
+ * @returns The InboundCallRow, or null if not found
  */
 export async function getInboundCall(retellCallId: string): Promise<InboundCallRow | null> {
   const { data, error } = await supabase
@@ -68,41 +71,41 @@ export async function getInboundCall(retellCallId: string): Promise<InboundCallR
 
 /**
  * Records which customer was identified for this call.
- * Called by lookup and confirm handlers once the customer is resolved.
  *
- * @param retellCallId - Retell call identifier
- * @param customerId   - Our buildops_customers.id (UUID)
+ * @param sessionId  - Stable session UUID
+ * @param customerId - Our buildops_customers.id (UUID)
  */
 export async function setMatchedCustomer(
-  retellCallId: string,
+  sessionId: string,
   customerId: string,
 ): Promise<void> {
   await supabase
     .from('buildops_inbound_calls')
     .update({ matched_customer_id: customerId })
-    .eq('retell_call_id', retellCallId);
+    .eq('session_id', sessionId);
 }
 
 /**
  * Records that a BuildOps job was successfully created during this call.
  * Sets status to 'job_created' and stores the BuildOps job UUID.
  *
- * @param retellCallId  - Retell call identifier
+ * @param sessionId     - Stable session UUID
  * @param buildopsJobId - BuildOps job UUID returned by POST /v1/jobs
  */
 export async function setJobCreated(
-  retellCallId: string,
+  sessionId: string,
   buildopsJobId: string,
 ): Promise<void> {
   await supabase
     .from('buildops_inbound_calls')
     .update({ buildops_job_id: buildopsJobId, status: 'job_created' })
-    .eq('retell_call_id', retellCallId);
+    .eq('session_id', sessionId);
 }
 
 /**
  * Finds the most recent active session for a caller+tenant pair.
- * Used at call_started to locate the temp-ID session created at call_inbound.
+ * Used at call_started to locate the session created at call_inbound,
+ * and as a fallback for function calls when direct lookup fails.
  */
 export async function findActiveByCallerAndTenant(
   tenantId: string,
@@ -115,6 +118,7 @@ export async function findActiveByCallerAndTenant(
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('status', 'active')
+    .order('created_at', { ascending: false })
     .limit(5);
 
   if (error || !data || (data as unknown[]).length === 0) {
@@ -132,32 +136,34 @@ export async function findActiveByCallerAndTenant(
 }
 
 /**
- * Replaces a temporary call ID (generated at call_inbound) with the real Retell call ID
- * received at call_started. All subsequent lookups use the real ID.
+ * Sets the real Retell call_id on the session row at call_started.
+ * After this, getInboundCall(realCallId) will find the row directly.
+ *
+ * @param sessionId  - Stable session UUID (from call_inbound)
+ * @param realCallId - Retell's real call_id received at call_started
  */
-export async function updateRetellCallId(
-  currentCallId: string,
-  newCallId: string,
+export async function setRetellCallId(
+  sessionId: string,
+  realCallId: string,
 ): Promise<void> {
   await supabase
     .from('buildops_inbound_calls')
-    .update({ retell_call_id: newCallId })
-    .eq('retell_call_id', currentCallId);
+    .update({ retell_call_id: realCallId })
+    .eq('session_id', sessionId);
 }
 
 /**
  * Updates the call status.
- * Valid transitions: active → ended (normal), active → handed_off (transferred/low confidence).
  *
- * @param retellCallId - Retell call identifier
- * @param status       - New status: 'active' | 'ended' | 'handed_off' | 'job_created'
+ * @param sessionId - Stable session UUID
+ * @param status    - New status
  */
 export async function setCallStatus(
-  retellCallId: string,
+  sessionId: string,
   status: InboundCallStatus,
 ): Promise<void> {
   await supabase
     .from('buildops_inbound_calls')
     .update({ status })
-    .eq('retell_call_id', retellCallId);
+    .eq('session_id', sessionId);
 }

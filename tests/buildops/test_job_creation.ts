@@ -56,7 +56,7 @@ async function getSession(callId: string): Promise<Record<string, unknown> | nul
 async function getMostRecentSession(): Promise<Record<string, unknown> | null> {
   const { data } = await supabase
     .from('buildops_inbound_calls')
-    .select('retell_call_id, caller, tenant_id, matched_customer_id, status, buildops_job_id, created_at')
+    .select('session_id, retell_call_id, caller, tenant_id, matched_customer_id, status, buildops_job_id, created_at')
     .order('created_at', { ascending: false })
     .limit(1)
     .single();
@@ -106,8 +106,8 @@ async function testA() {
     !!sessionAfterInbound && sessionAfterInbound.caller === UNKNOWN_CALLER && sessionAfterInbound.matched_customer_id === null,
     `caller="${sessionAfterInbound?.caller}", matched="${sessionAfterInbound?.matched_customer_id}"`,
   );
-  const tempId = sessionAfterInbound?.retell_call_id as string | undefined;
-  console.log(`     temp retell_call_id: "${tempId}"`);
+  const tempId = sessionAfterInbound?.session_id as string | undefined;
+  console.log(`     session_id: "${tempId}"`);
 
   console.log('\n[A2] call_started — real call_id assigned (expect: session swap)');
   await post('/retell/webhook', {
@@ -193,7 +193,7 @@ async function testB() {
 
   const sessionAfterInbound = await getMostRecentSession();
   check('B1 matchedCustomerId=clara', sessionAfterInbound?.matched_customer_id === CLARA.id, `matched="${sessionAfterInbound?.matched_customer_id}"`);
-  const tempId = sessionAfterInbound?.retell_call_id as string | undefined;
+  const tempId = sessionAfterInbound?.session_id as string | undefined;
 
   console.log('\n[B2] call_started — swap UUID to real call_id');
   await post('/retell/webhook', {

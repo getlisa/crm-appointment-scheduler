@@ -31,7 +31,7 @@ export async function handleLookupFuzzy(
 ): Promise<RetellFunctionResult> {
   if (session.matchedCustomerId) {
     console.log('[buildops] lookup_customer_fuzzy blocked: caller already identified', {
-      retellCallId: session.retellCallId,
+      sessionId: session.sessionId,
       matchedCustomerId: session.matchedCustomerId,
     });
     return {
@@ -57,7 +57,7 @@ export async function handleLookupFuzzy(
   }
 
   console.log('[buildops] fuzzy lookup start', {
-    retellCallId: session.retellCallId,
+    sessionId: session.sessionId,
     tenantId: session.tenantId,
     query,
   });
@@ -65,7 +65,7 @@ export async function handleLookupFuzzy(
   const candidates = await getFuzzyCandidates(session.tenantId, query);
 
   if (candidates.length === 0) {
-    await setCallStatus(session.retellCallId, 'handed_off');
+    await setCallStatus(session.sessionId, 'handed_off');
     return {
       result: JSON.stringify({
         status: 'not_found',
@@ -121,7 +121,7 @@ export async function handleLookupFuzzy(
   if (rated[0]?.signals.queryHasFullName && queryAddr) {
     const addrMatches = rated.filter(r => r.signals.addressQueryMatch || r.signals.addressMatch);
     if (addrMatches.length > 0 && addrMatches.every(r => r.signals.nameMismatch)) {
-      await setCallStatus(session.retellCallId, 'handed_off');
+      await setCallStatus(session.sessionId, 'handed_off');
       return {
         result: JSON.stringify({
           status: 'not_found',
@@ -133,7 +133,7 @@ export async function handleLookupFuzzy(
   }
 
   console.log('[buildops] fuzzy lookup scored', {
-    retellCallId: session.retellCallId,
+    sessionId: session.sessionId,
     candidateCount: candidates.length,
     tier1Count: tier1.length,
     tier2Count: tier2.length,
@@ -145,13 +145,13 @@ export async function handleLookupFuzzy(
     confidenceTier: 1 | 2,
   ): Promise<RetellFunctionResult> => {
     console.log('[buildops] fuzzy lookup accepted', {
-      retellCallId: session.retellCallId,
+      sessionId: session.sessionId,
       customerId: r.customer.id,
       customerName: r.customer.name,
       confidenceTier,
       tierRule: r.tier.rule,
     });
-    await setMatchedCustomer(session.retellCallId, r.customer.id);
+    await setMatchedCustomer(session.sessionId, r.customer.id);
     const newNumberDetected = !!callerPhone && !r.customer.allNumbers.includes(callerPhone);
     const properties = await getPropertiesByIds(r.customer.propertyIds);
     const primary = pickPrimaryAddress(r.customer, properties);
@@ -178,7 +178,7 @@ export async function handleLookupFuzzy(
     const best = tier1[0];
     const cv = crossValidate(queryName, queryAddr, queryPhone, best.signals);
     if (cv.pass) return accept(best, 1);
-    await setCallStatus(session.retellCallId, 'handed_off');
+    await setCallStatus(session.sessionId, 'handed_off');
     return {
       result: JSON.stringify({
         status: 'not_found',
@@ -211,7 +211,7 @@ export async function handleLookupFuzzy(
   }
 
   // ── Tier 3 — low confidence → transfer ─────────────────────────────────────
-  await setCallStatus(session.retellCallId, 'handed_off');
+  await setCallStatus(session.sessionId, 'handed_off');
   return {
     result: JSON.stringify({
       status: 'not_found',
