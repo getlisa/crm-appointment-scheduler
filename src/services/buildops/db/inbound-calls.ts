@@ -108,17 +108,27 @@ export async function findActiveByCallerAndTenant(
   tenantId: string,
   caller: string,
 ): Promise<InboundCallRow | null> {
+  const last10 = caller.replace(/\D/g, '').slice(-10);
+
   const { data, error } = await supabase
     .from('buildops_inbound_calls')
     .select('*')
     .eq('tenant_id', tenantId)
-    .eq('caller', caller)
     .eq('status', 'active')
-    .order('created_at', { ascending: false })
-    .limit(1);
+    .limit(5);
 
-  if (error || !data || (data as unknown[]).length === 0) return null;
-  return mapRow((data as Record<string, unknown>[])[0]);
+  if (error || !data || (data as unknown[]).length === 0) {
+    console.log('[buildops] findActiveByCallerAndTenant', { tenantId, callerLast10: last10, rowsFound: 0, matched: false, error: error?.message });
+    return null;
+  }
+
+  const match = (data as Record<string, unknown>[]).find(row => {
+    const storedLast10 = ((row.caller as string) ?? '').replace(/\D/g, '').slice(-10);
+    return storedLast10.length === 10 && last10.length === 10 && storedLast10 === last10;
+  });
+
+  console.log('[buildops] findActiveByCallerAndTenant', { tenantId, callerLast10: last10, rowsFound: (data as unknown[]).length, matched: !!match });
+  return match ? mapRow(match) : null;
 }
 
 /**

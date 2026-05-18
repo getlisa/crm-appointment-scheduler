@@ -142,14 +142,18 @@ alter table public.buildops_representatives
 -- Created at call_started, updated throughout lifecycle.
 -- ─────────────────────────────────────────────
 create table if not exists public.buildops_inbound_calls (
-  id                   uuid    primary key default gen_random_uuid(),
-  retell_call_id       text    not null unique,
-  tenant_id            text    not null,
+  id                   uuid        primary key default gen_random_uuid(),
+  retell_call_id       text        not null unique,
+  tenant_id            text        not null,
   caller               text,                                  -- E.164 number of the caller
   matched_customer_id  text,                                  -- our buildops_customers.id (UUID)
-  status               text    not null default 'active',     -- active | ended | handed_off
-  buildops_job_id      text                                   -- set immediately when prepare_job completes
+  status               text        not null default 'active', -- active | ended | handed_off
+  buildops_job_id      text,                                  -- set immediately when prepare_job completes
+  created_at           timestamptz not null default now()
 );
+
+alter table public.buildops_inbound_calls
+  add column if not exists created_at timestamptz not null default now();
 
 -- ─────────────────────────────────────────────
 -- buildops_jobs

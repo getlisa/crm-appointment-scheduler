@@ -121,11 +121,12 @@ export async function handlePrepareJob(
   ctx: BuildOpsContext,
   args: Record<string, unknown>,
 ): Promise<RetellFunctionResult> {
+  const customerPropertyId = args.customer_property_id as string | undefined;
+  console.log('[buildops] prepare_job start', { retellCallId: session.retellCallId, matchedCustomerId: session.matchedCustomerId, customerPropertyId });
+
   if (!session.matchedCustomerId) {
     return { result: 'error: no customer confirmed — complete customer lookup first' };
   }
-
-  const customerPropertyId = args.customer_property_id as string | undefined;
   const rawStatus = (args.status as string | undefined) ?? 'Open';
   const rawTasks   = (args.tasks as unknown[] | undefined) ?? [];
   const needsReview = !!(args.needs_review);
@@ -156,7 +157,9 @@ export async function handlePrepareJob(
 
   const liveCustomer = await getCustomer(ctx, customer.buildopsCustomerId).catch(() => null);
   const accountStatus = (liveCustomer as Record<string, unknown> | null)?.['status'] as string | null ?? null;
+  console.log('[buildops] prepare_job customer check', { customerId: customer.id, buildopsCustomerId: customer.buildopsCustomerId, accountStatus });
   if (accountStatus && BLOCKED_STATUSES.has(accountStatus)) {
+    console.log('[buildops] prepare_job blocked', { reason: accountStatus, customerId: customer.id });
     return {
       result: JSON.stringify({
         status: 'blocked',
@@ -204,6 +207,7 @@ export async function handlePrepareJob(
 
   try {
     const jobResult = await executeJobCreation(session, activeCtx, pendingJob);
+    console.log('[buildops] prepare_job result', { status: 'created', jobId: jobResult.jobId, jobNumber: jobResult.jobNumber, retellCallId: session.retellCallId });
     return {
       result: JSON.stringify({
         status: 'created',
@@ -219,6 +223,7 @@ export async function handlePrepareJob(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.error('[buildops] prepare_job error', { retellCallId: session.retellCallId, error: msg });
     return { result: `error: job creation failed — ${msg}` };
   }
 }

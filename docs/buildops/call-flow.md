@@ -50,7 +50,54 @@ Each Retell custom function has its own dedicated endpoint under `/api/buildops/
 
 ### 3. `call_ended`
 
-Sets `buildops_inbound_calls.status = 'ended'`. **No job creation happens here** — jobs are created during the call via `prepare_job`.
+Writes `disconnection_reason` from the Retell payload as the session status. **No job creation happens here** — jobs are created during the call via `prepare_job`.
+
+Retell `disconnection_reason` values written directly as `buildops_inbound_calls.status`:
+
+| Value | Meaning |
+|---|---|
+| `user_hangup` | Caller hung up |
+| `agent_hangup` | Agent ended the call |
+| `call_transfer` | Call was transferred |
+| `voicemail_reached` | Voicemail answered |
+| `inactivity` | Call idle timeout |
+| `machine_detected` | Answering machine |
+| `max_duration_reached` | Call hit max duration |
+| `concurrency_limit_reached` | Capacity limit |
+| `dial_busy` | Line busy |
+| `dial_failed` | Dial failure |
+| `dial_no_answer` | No answer |
+| `error_inbound_webhook` | Webhook error |
+
+Falls back to `'ended'` if `disconnection_reason` is absent.
+
+---
+
+## Allowed Call Flows
+
+Two flows are permitted. All other paths (e.g. an identified caller calling `lookup_customer_fuzzy` to switch accounts) are blocked by the backend.
+
+**Flow 1 — Unknown caller → associate → optionally add rep**
+
+```
+call_inbound (not_found)
+  → call_started (session swap UUID → real call_id)
+  → lookup_customer_fuzzy (identifies caller against existing account)
+  → prepare_job (job creation)
+  → add_representative (optional — registers caller's phone on the account)
+  → call_ended
+```
+
+**Flow 2 — Identified caller → job**
+
+```
+call_inbound (found — phone matched directly)
+  → call_started (session swap)
+  → prepare_job (job creation)
+  → call_ended
+```
+
+> **Backend guard**: `handleLookupFuzzy` returns an error immediately if `session.matchedCustomerId` is already set — prevents an identified caller from cross-booking to a different account mid-call.
 
 ---
 

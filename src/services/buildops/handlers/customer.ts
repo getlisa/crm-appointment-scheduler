@@ -17,9 +17,11 @@ export async function handleConfirmCustomer(
   args: Record<string, unknown>,
 ): Promise<RetellFunctionResult> {
   const candidateId = args.candidate_id as string | undefined;
+  console.log('[buildops] confirm_customer', { retellCallId: session.retellCallId, candidateId });
   if (!candidateId) return { result: 'error: candidate_id is required' };
 
   const customer = await getCustomerById(session.tenantId, candidateId);
+  console.log('[buildops] confirm_customer result', { found: !!customer, customerId: customer?.id, customerName: customer?.name });
   if (!customer) return { result: 'error: customer not found for this tenant' };
 
   await setMatchedCustomer(session.retellCallId, customer.id);
