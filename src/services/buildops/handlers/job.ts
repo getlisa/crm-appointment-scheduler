@@ -22,8 +22,10 @@ import type {
   PendingTaskData,
 } from '../types.js';
 
-const DEFAULT_JOB_TYPE_ID = '04df1a40-16b1-43f4-aa9b-8eafcec812ad';
-const DEFAULT_DEPARTMENT_ID = 'd87c1a38-4acd-459f-9b3f-446a810fae10';
+const DEFAULT_JOB_TYPE_ID    = '04df1a40-16b1-43f4-aa9b-8eafcec812ad';
+const DEFAULT_JOB_TYPE_NAME  = 'Time & Material';
+const DEFAULT_DEPARTMENT_ID  = 'd87c1a38-4acd-459f-9b3f-446a810fae10';
+const DEFAULT_DEPARTMENT_NAME = 'D2 Service Calls (T&M)';
 
 const ALLOWED_STATUSES: JobStatus[] = ['Open', 'In Progress', 'On Hold', 'Canceled', 'Complete'];
 
@@ -84,13 +86,13 @@ export async function executeJobCreation(
     customerPropertyId: data.customerPropertyId,
     customerId: customer.buildopsCustomerId,
     customerName: jobResult.customerName ?? customer.name,
-    jobTypeName: jobResult.jobTypeName ?? undefined,
+    jobTypeName: jobResult.jobTypeName ?? DEFAULT_JOB_TYPE_NAME,
     jobTypeId: data.jobTypeId,
     priceBookId: data.priceBookId,
     isUseTaxable: data.isUseTaxable,
     departments: jobResult.departments.length > 0
       ? jobResult.departments
-      : data.departmentId ? [{ id: data.departmentId, name: '' }] : [],
+      : data.departmentId ? [{ id: data.departmentId, name: DEFAULT_DEPARTMENT_NAME }] : [],
     issueDescription: data.issueDescription,
   });
 
@@ -129,7 +131,7 @@ export async function handlePrepareJob(
   const needsReview = !!(args.needs_review);
   const rawIssueDescription = (args.issue_description as string | undefined)?.trim() ?? '';
   const issueDescription = rawIssueDescription
-    ? `${rawIssueDescription}\n[Job Created by Clara]`
+    ? `[Job Created by Clara]\n${rawIssueDescription}`
     : '[Job Created by Clara]';
 
   if (!customerPropertyId) {

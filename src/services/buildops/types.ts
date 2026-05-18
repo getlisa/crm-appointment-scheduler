@@ -139,7 +139,6 @@ export interface JobRow {
   serviceAgreementId: string | null;
   completedDate: number | null;
   isDeleted: boolean;
-  audit: Record<string, unknown> | null;
 }
 
 // ── Shared value types ────────────────────────────────────────────────────────
