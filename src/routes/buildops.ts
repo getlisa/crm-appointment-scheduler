@@ -50,8 +50,16 @@ function logBuildopsException(context: string, error: unknown): void {
   }
 }
 
-async function resolveSession(callId: string) {
-  const session = await getInboundCall(callId);
+async function resolveSession(callId: string | undefined, fromNumber?: string, toNumber?: string) {
+  let session = callId ? await getInboundCall(callId) : null;
+
+  if (!session && fromNumber && toNumber) {
+    const tenantRes = await resolveByInboundNumber(toNumber);
+    if (tenantRes) {
+      session = await findActiveByCallerAndTenant(tenantRes.buildops_tenant_id, fromNumber);
+    }
+  }
+
   if (!session) return null;
   const resolution = await resolveByTenantId(session.tenantId);
   if (!resolution) return null;
@@ -263,8 +271,16 @@ router.post('/retell/webhook', async (req, res) => {
 
     if (event === 'call_ended') {
       const callId = body.call?.call_id;
+      const fromNumber = body.call?.from_number ?? '';
+      const toNumber = body.call?.to_number ?? '';
       if (callId) {
         await setCallStatus(callId, 'ended').catch(() => undefined);
+      } else if (fromNumber && toNumber) {
+        const resolution = await resolveByInboundNumber(toNumber);
+        if (resolution) {
+          const session = await findActiveByCallerAndTenant(resolution.buildops_tenant_id, fromNumber);
+          if (session) await setCallStatus(session.retellCallId, 'ended').catch(() => undefined);
+        }
       }
       res.json({ ok: true });
       return;
@@ -287,10 +303,12 @@ router.post('/retell/webhook', async (req, res) => {
 router.post('/fn/lookup_customer_fuzzy', async (req, res) => {
   try {
     const body = req.body as Record<string, unknown>;
-    const callId = (body?.call as Record<string, unknown>)?.call_id as string | undefined;
+    const call = body?.call as Record<string, unknown> | undefined;
+    const callId = call?.call_id as string | undefined;
+    const fromNumber = call?.from_number as string | undefined;
+    const toNumber = call?.to_number as string | undefined;
     const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
-    if (!callId) { res.json({ result: 'error: call_id is required' }); return; }
-    const resolved = await resolveSession(callId);
+    const resolved = await resolveSession(callId, fromNumber, toNumber);
     if (!resolved) { res.json({ result: 'error: session not found' }); return; }
     res.json(await handleLookupFuzzy(resolved.session, args));
   } catch (err) {
@@ -307,10 +325,12 @@ router.post('/fn/lookup_customer_fuzzy', async (req, res) => {
 router.post('/fn/confirm_customer', async (req, res) => {
   try {
     const body = req.body as Record<string, unknown>;
-    const callId = (body?.call as Record<string, unknown>)?.call_id as string | undefined;
+    const call = body?.call as Record<string, unknown> | undefined;
+    const callId = call?.call_id as string | undefined;
+    const fromNumber = call?.from_number as string | undefined;
+    const toNumber = call?.to_number as string | undefined;
     const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
-    if (!callId) { res.json({ result: 'error: call_id is required' }); return; }
-    const resolved = await resolveSession(callId);
+    const resolved = await resolveSession(callId, fromNumber, toNumber);
     if (!resolved) { res.json({ result: 'error: session not found' }); return; }
     res.json(await handleConfirmCustomer(resolved.session, args));
   } catch (err) {
@@ -327,10 +347,12 @@ router.post('/fn/confirm_customer', async (req, res) => {
 router.post('/fn/match_property', async (req, res) => {
   try {
     const body = req.body as Record<string, unknown>;
-    const callId = (body?.call as Record<string, unknown>)?.call_id as string | undefined;
+    const call = body?.call as Record<string, unknown> | undefined;
+    const callId = call?.call_id as string | undefined;
+    const fromNumber = call?.from_number as string | undefined;
+    const toNumber = call?.to_number as string | undefined;
     const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
-    if (!callId) { res.json({ result: 'error: call_id is required' }); return; }
-    const resolved = await resolveSession(callId);
+    const resolved = await resolveSession(callId, fromNumber, toNumber);
     if (!resolved) { res.json({ result: 'error: session not found' }); return; }
     res.json(await handleMatchProperty(resolved.session, args));
   } catch (err) {
@@ -347,10 +369,12 @@ router.post('/fn/match_property', async (req, res) => {
 router.post('/fn/prepare_job', async (req, res) => {
   try {
     const body = req.body as Record<string, unknown>;
-    const callId = (body?.call as Record<string, unknown>)?.call_id as string | undefined;
+    const call = body?.call as Record<string, unknown> | undefined;
+    const callId = call?.call_id as string | undefined;
+    const fromNumber = call?.from_number as string | undefined;
+    const toNumber = call?.to_number as string | undefined;
     const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
-    if (!callId) { res.json({ result: 'error: call_id is required' }); return; }
-    const resolved = await resolveSession(callId);
+    const resolved = await resolveSession(callId, fromNumber, toNumber);
     if (!resolved) { res.json({ result: 'error: session not found' }); return; }
     res.json(await handlePrepareJob(resolved.session, resolved.ctx, args));
   } catch (err) {
@@ -367,10 +391,12 @@ router.post('/fn/prepare_job', async (req, res) => {
 router.post('/fn/add_representative', async (req, res) => {
   try {
     const body = req.body as Record<string, unknown>;
-    const callId = (body?.call as Record<string, unknown>)?.call_id as string | undefined;
+    const call = body?.call as Record<string, unknown> | undefined;
+    const callId = call?.call_id as string | undefined;
+    const fromNumber = call?.from_number as string | undefined;
+    const toNumber = call?.to_number as string | undefined;
     const args = normalizedBuildopsPayload(req) as Record<string, unknown>;
-    if (!callId) { res.json({ result: 'error: call_id is required' }); return; }
-    const resolved = await resolveSession(callId);
+    const resolved = await resolveSession(callId, fromNumber, toNumber);
     if (!resolved) { res.json({ result: 'error: session not found' }); return; }
     res.json(await handleAddRepresentative(resolved.session, resolved.ctx, args));
   } catch (err) {

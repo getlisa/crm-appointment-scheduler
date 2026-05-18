@@ -81,9 +81,21 @@ export async function getJobTypes(ctx: BuildOpsContext): Promise<JobTypeItem[]> 
 export async function createJob(
   ctx: BuildOpsContext,
   input: CreateJobInput,
-): Promise<{ jobId: string; jobNumber: string }> {
+): Promise<{
+  jobId: string;
+  jobNumber: string;
+  customerName: string | null;
+  jobTypeName: string | null;
+  departments: { id: string; name: string }[];
+}> {
   const job = await request<BuildOpsJobResponse>(ctx, 'POST', '/v1/jobs', input);
-  return { jobId: job.id, jobNumber: job.jobNumber };
+  return {
+    jobId: job.id,
+    jobNumber: job.jobNumber,
+    customerName: job.customerName ?? null,
+    jobTypeName: job.jobTypeName ?? null,
+    departments: job.departments ?? [],
+  };
 }
 
 /**

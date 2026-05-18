@@ -72,6 +72,7 @@ export async function executeJobCreation(
     isUseTaxable: data.isUseTaxable,
     status: data.status,
     departmentIds: data.departmentId ? [data.departmentId] : null,
+    issueDescription: data.issueDescription,
   });
 
   await setJobCreated(session.retellCallId, jobResult.jobId);
@@ -82,9 +83,15 @@ export async function executeJobCreation(
     status: data.status,
     customerPropertyId: data.customerPropertyId,
     customerId: customer.buildopsCustomerId,
+    customerName: jobResult.customerName ?? customer.name,
+    jobTypeName: jobResult.jobTypeName ?? undefined,
     jobTypeId: data.jobTypeId,
     priceBookId: data.priceBookId,
     isUseTaxable: data.isUseTaxable,
+    departments: jobResult.departments.length > 0
+      ? jobResult.departments
+      : data.departmentId ? [{ id: data.departmentId, name: '' }] : [],
+    issueDescription: data.issueDescription,
   });
 
   for (const task of data.tasks) {
@@ -120,6 +127,10 @@ export async function handlePrepareJob(
   const rawStatus = (args.status as string | undefined) ?? 'Open';
   const rawTasks   = (args.tasks as unknown[] | undefined) ?? [];
   const needsReview = !!(args.needs_review);
+  const rawIssueDescription = (args.issue_description as string | undefined)?.trim() ?? '';
+  const issueDescription = rawIssueDescription
+    ? `${rawIssueDescription}\n[Job Created by Clara]`
+    : '[Job Created by Clara]';
 
   if (!customerPropertyId) {
     return { result: 'error: customer_property_id is required' };
@@ -181,6 +192,7 @@ export async function handlePrepareJob(
     needsReview,
     departmentId: DEFAULT_DEPARTMENT_ID,
     tasks,
+    issueDescription,
   };
 
   // Resolve a fresh context if the passed ctx may have a stale token
