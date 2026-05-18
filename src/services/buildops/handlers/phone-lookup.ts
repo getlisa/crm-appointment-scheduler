@@ -38,7 +38,7 @@ export async function handleLookupByPhone(
   }
 
   if (matches.length === 1) {
-    await setMatchedCustomer(session.retellCallId, matches[0].id);
+    await setMatchedCustomer(session.sessionId, matches[0].id);
     const properties = await getPropertiesByIds(matches[0].propertyIds);
     const primary = pickPrimaryAddress(matches[0], properties);
     return {

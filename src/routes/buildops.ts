@@ -9,7 +9,7 @@ import {
   getInboundCall,
   setCallStatus,
   setMatchedCustomer,
-  updateRetellCallId,
+  setRetellCallId,
 } from '../services/buildops/db/inbound-calls.js';
 import { findCustomersByPhone } from '../services/buildops/db/customers.js';
 import { getPropertiesByIds } from '../services/buildops/db/properties.js';
@@ -27,10 +27,10 @@ const router = Router();
 
 // ── Shared helpers (following ServiceTitan router conventions) ────────────────
 
-/** Retell / custom function runners sometimes send fields under `body.arguments`; otherwise use root. */
+/** Retell sends function args under body.args (args_at_root:false) or at root (args_at_root:true). */
 function normalizedBuildopsPayload(req: { body?: unknown }): unknown {
-  const body = req.body as { arguments?: unknown } | undefined;
-  return body?.arguments ?? body ?? {};
+  const body = req.body as { arguments?: unknown; args?: unknown } | undefined;
+  return body?.arguments ?? body?.args ?? body ?? {};
 }
 
 function logBuildopsException(context: string, error: unknown): void {
@@ -73,7 +73,7 @@ async function resolveSession(callId: string | undefined, fromNumber?: string, t
     buildopsTenantId: resolution.buildops_tenant_id,
     apiUrl: env.buildopsApiUrl,
   };
-  console.log('[buildops] resolveSession ok', { retellCallId: session.retellCallId, tenantId: session.tenantId, matchedCustomerId: session.matchedCustomerId });
+  console.log('[buildops] resolveSession ok', { sessionId: session.sessionId, retellCallId: session.retellCallId, tenantId: session.tenantId, matchedCustomerId: session.matchedCustomerId });
   return { session, ctx };
 }
 
@@ -185,9 +185,9 @@ router.post('/retell/webhook', async (req, res) => {
             fromNumber,
           );
           const needsSwap = session && session.retellCallId !== callId;
-          console.log('[buildops] session swap', { found: !!session, oldId: session?.retellCallId, newId: callId, swapped: needsSwap });
+          console.log('[buildops] session swap', { found: !!session, sessionId: session?.sessionId, newRetellCallId: callId, swapped: needsSwap });
           if (needsSwap) {
-            await updateRetellCallId(session.retellCallId, callId);
+            await setRetellCallId(session.sessionId, callId);
           }
         }
       }
@@ -214,7 +214,7 @@ router.post('/retell/webhook', async (req, res) => {
       }
 
       await createInboundCall({
-        retellCallId: callId,
+        sessionId: callId,
         tenantId: resolution.buildops_tenant_id,
         caller: fromNumber,
       });
@@ -298,14 +298,15 @@ router.post('/retell/webhook', async (req, res) => {
       const disconnectionReason = (body.call as Record<string, unknown> | undefined)?.disconnection_reason as string | undefined;
       const newStatus = (disconnectionReason ?? 'ended') as InboundCallStatus;
       console.log('[buildops] call_ended req', { callId, fromNumber, toNumber, disconnectionReason, newStatus });
-      if (callId) {
-        await setCallStatus(callId, newStatus).catch(() => undefined);
-      } else if (fromNumber && toNumber) {
+      let sessionToClose = callId ? await getInboundCall(callId) : null;
+      if (!sessionToClose && fromNumber && toNumber) {
         const resolution = await resolveByInboundNumber(toNumber);
         if (resolution) {
-          const session = await findActiveByCallerAndTenant(resolution.buildops_tenant_id, fromNumber);
-          if (session) await setCallStatus(session.retellCallId, newStatus).catch(() => undefined);
+          sessionToClose = await findActiveByCallerAndTenant(resolution.buildops_tenant_id, fromNumber);
         }
+      }
+      if (sessionToClose) {
+        await setCallStatus(sessionToClose.sessionId, newStatus).catch(() => undefined);
       }
       console.log('[buildops] call_ended resp', { ok: true });
       res.json({ ok: true });

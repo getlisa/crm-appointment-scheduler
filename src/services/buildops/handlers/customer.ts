@@ -17,14 +17,14 @@ export async function handleConfirmCustomer(
   args: Record<string, unknown>,
 ): Promise<RetellFunctionResult> {
   const candidateId = args.candidate_id as string | undefined;
-  console.log('[buildops] confirm_customer', { retellCallId: session.retellCallId, candidateId });
+  console.log('[buildops] confirm_customer', { sessionId: session.sessionId, candidateId });
   if (!candidateId) return { result: 'error: candidate_id is required' };
 
   const customer = await getCustomerById(session.tenantId, candidateId);
   console.log('[buildops] confirm_customer result', { found: !!customer, customerId: customer?.id, customerName: customer?.name });
   if (!customer) return { result: 'error: customer not found for this tenant' };
 
-  await setMatchedCustomer(session.retellCallId, customer.id);
+  await setMatchedCustomer(session.sessionId, customer.id);
   const properties = await getPropertiesByIds(customer.propertyIds);
   const primary = pickPrimaryAddress(customer, properties);
   return {
@@ -116,7 +116,7 @@ export async function handleMatchProperty(
   const second = scored[1];
 
   if (best.score < MATCH_CONFIDENT) {
-    await setCallStatus(session.retellCallId, 'handed_off');
+    await setCallStatus(session.sessionId, 'handed_off');
     return {
       result: JSON.stringify({
         status: 'not_found',
