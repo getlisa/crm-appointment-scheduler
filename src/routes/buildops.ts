@@ -12,7 +12,7 @@ import {
   setRetellCallId,
 } from '../services/buildops/db/inbound-calls.js';
 import { findCustomersByPhone } from '../services/buildops/db/customers.js';
-import { getPropertiesByIds } from '../services/buildops/db/properties.js';
+import { getPropertiesByIds, getPropertyById } from '../services/buildops/db/properties.js';
 import { normalizePhoneLast10, pickPrimaryAddress } from '../services/buildops/fuzzy-search.js';
 import { handleLookupFuzzy } from '../services/buildops/handlers/fuzzy-lookup.js';
 import {
@@ -238,6 +238,27 @@ router.post('/retell/webhook', async (req, res) => {
         const customer = matches[0];
         const properties = await getPropertiesByIds(customer.propertyIds);
         const primary = pickPrimaryAddress(customer, properties);
+
+        // Determine caller's source (rep vs customer's own number) from all_numbers_sources
+        const callerLast10 = normalizePhoneLast10(fromNumber) ?? '';
+        const sourceIdx = customer.allNumbers.indexOf(callerLast10);
+        const rawSource = sourceIdx >= 0 ? (customer.allNumbersSources[sourceIdx] ?? '') : '';
+        const isRep = rawSource.startsWith('rep:');
+        const repNameMatch = rawSource.match(/^rep:[^:]+:([^:]+?)(?::prop:|$)/);
+        const callerRepName = repNameMatch?.[1] ?? '';
+        const repPropMatch = rawSource.match(/:prop:(.+)$/);
+        const repPropertyId = repPropMatch?.[1] ?? '';
+
+        // If rep is associated with a specific property, fetch its formatted address
+        let repPropertyAddress = '';
+        if (repPropertyId) {
+          const repProp = await getPropertyById(repPropertyId).catch(() => null);
+          if (repProp) {
+            const a = repProp.address;
+            repPropertyAddress = [a.line1, a.city, a.state, a.zip].filter(Boolean).join(', ');
+          }
+        }
+
         const foundResp = {
           call_inbound: {
             override_agent_id: env.retellLlmId ?? undefined,
@@ -254,6 +275,10 @@ router.post('/retell/webhook', async (req, res) => {
               multiple_matches: 'false',
               property_count: String(properties.length),
               property_id: properties.length === 1 ? properties[0].id : '',
+              caller_source_type: isRep ? 'rep' : 'customer',
+              caller_rep_name: callerRepName,
+              rep_property_id: repPropertyId,
+              rep_property_address: repPropertyAddress,
             },
           },
         };

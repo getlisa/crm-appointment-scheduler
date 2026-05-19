@@ -123,10 +123,13 @@ export async function handlePrepareJob(
   }
   const rawStatus = (args.status as string | undefined) ?? 'Open';
   const needsReview = !!(args.needs_review);
+  const callerName = (args.caller_name as string | undefined)?.trim() || 'Unknown';
+  const callbackNumber = session.caller ?? '';
+  const callerLine = `Caller: ${callerName} | Callback: ${callbackNumber}`;
   const rawIssueDescription = (args.issue_description as string | undefined)?.trim() ?? '';
   const issueDescription = rawIssueDescription
-    ? `[Job Created by Clara]\n${rawIssueDescription}`
-    : '[Job Created by Clara]';
+    ? `[Job Created by Clara]\n${callerLine}\n${rawIssueDescription}`
+    : `[Job Created by Clara]\n${callerLine}`;
 
   if (!customerPropertyId) {
     return { result: 'error: customer_property_id is required' };

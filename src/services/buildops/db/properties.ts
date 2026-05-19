@@ -51,6 +51,33 @@ export async function getPropertiesByIds(ids: string[]): Promise<PropertyRow[]> 
 }
 
 /**
+ * Appends a BuildOps rep UUID to the property's representative_ids array (best-effort).
+ * No-ops if the rep ID is already present. Called after add_representative succeeds
+ * so future call_inbound lookups can identify the caller's associated property.
+ *
+ * @param propertyId    - BuildOps property UUID (TEXT primary key)
+ * @param buildopsRepId - BuildOps representative UUID to append
+ */
+export async function appendToPropertyRepresentativeIds(
+  propertyId: string,
+  buildopsRepId: string,
+): Promise<void> {
+  const { data } = await supabase
+    .from('buildops_properties')
+    .select('representative_ids')
+    .eq('id', propertyId)
+    .single();
+
+  const current: string[] = (data as { representative_ids: string[] } | null)?.representative_ids ?? [];
+  if (current.includes(buildopsRepId)) return;
+
+  await supabase
+    .from('buildops_properties')
+    .update({ representative_ids: [...current, buildopsRepId] })
+    .eq('id', propertyId);
+}
+
+/**
  * Fetches a single property by BuildOps property UUID.
  * Used in handlePrepareJob to verify the property exists and belongs to the confirmed customer.
  *
