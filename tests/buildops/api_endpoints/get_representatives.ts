@@ -11,10 +11,14 @@ const CLIENT_SECRET = process.env.CLIENT_SECRET!;
 const TENANT_ID     = process.env.TENANT_ID!;
 const BASE_URL      = 'https://public-api.live.buildops.com/v1';
 
-// Usage: npx tsx get_representatives.ts <inboundPhoneNumber>
-const INBOUND_PHONE = process.argv[2];
-if (!INBOUND_PHONE) {
-  console.error('Usage: npx tsx get_representatives.ts <inboundPhoneNumber>');
+// Usage: npx tsx get_representatives.ts <phone>
+//        npx tsx get_representatives.ts --id <buildops_customer_id>
+const idFlag = process.argv.indexOf('--id');
+const DIRECT_CUSTOMER_ID = idFlag !== -1 ? process.argv[idFlag + 1] : null;
+const INBOUND_PHONE = DIRECT_CUSTOMER_ID ? null : process.argv[2];
+if (!INBOUND_PHONE && !DIRECT_CUSTOMER_ID) {
+  console.error('Usage: npx tsx get_representatives.ts <phone>');
+  console.error('       npx tsx get_representatives.ts --id <buildops_customer_id>');
   process.exit(1);
 }
 
@@ -102,7 +106,9 @@ async function main() {
   const token = await getAccessToken();
   console.log('Token acquired.');
 
-  const customer = lookupCustomerByPhone(INBOUND_PHONE);
+  const customer = DIRECT_CUSTOMER_ID
+    ? { id: DIRECT_CUSTOMER_ID, name: DIRECT_CUSTOMER_ID }
+    : lookupCustomerByPhone(INBOUND_PHONE!);
   console.log(`Customer: "${customer.name}" (id: ${customer.id})\n`);
 
   const reps = await getRepresentatives(token, customer.id);

@@ -175,9 +175,10 @@ async function fetchAllProperties(token: string, tenantId: string): Promise<{
     const data = await res.json() as { totalCount?: number; items?: ApiProperty[] };
     if (page === 0) total = data.totalCount ?? 0;
     const items = data.items ?? [];
-    properties.push(...items);
+    const liveProps = items.filter(p => !p.audit?.deletedDateTime);
+    properties.push(...liveProps);
 
-    for (const p of items) {
+    for (const p of liveProps) {
       const cid = p.customerId;
       if (!cid) continue;
       const list = propMap.get(cid) ?? [];
@@ -426,17 +427,32 @@ async function fullSeed(supabase: SupabaseClient, token: string, tenantId: strin
 
 async function incrementalSync(supabase: SupabaseClient, token: string, tenantId: string): Promise<Record<string, unknown>> {
   // Load per-customer watermarks and versions from DB (Fix 1)
+  const REP_SWEEP_INTERVAL_MS = 2 * 60 * 60 * 1000;
+  const { data: tenantMeta } = await supabase
+    .from('buildops_tenants')
+    .select('last_rep_sweep_at')
+    .eq('buildops_tenant_id', tenantId)
+    .maybeSingle();
+  const lastSweep = tenantMeta?.last_rep_sweep_at
+    ? new Date(tenantMeta.last_rep_sweep_at as string).getTime() : 0;
+  const doRepSweep = Date.now() - lastSweep > REP_SWEEP_INTERVAL_MS;
+
   const { data: dbRows, error: dbErr } = await supabase
     .from('buildops_customers')
-    .select('buildops_customer_id, buildops_last_updated_at, version')
+    .select('buildops_customer_id, buildops_last_updated_at, version, representative_ids')
     .eq('tenant_id', tenantId);
   if (dbErr) throw new Error(`dbCustomerMap query: ${dbErr.message}`);
 
   const dbCustomerMap = new Map(
-    (dbRows ?? []).map(r => [r.buildops_customer_id as string, {
-      ts: (r.buildops_last_updated_at as number) ?? 0,
-      version: (r.version as number) ?? 0,
-    }])
+    (dbRows ?? []).map(r => {
+      const raw = r.representative_ids;
+      const repIds = Array.isArray(raw) ? raw as string[] : JSON.parse(typeof raw === 'string' ? raw : '[]') as string[];
+      return [r.buildops_customer_id as string, {
+        ts: (r.buildops_last_updated_at as number) ?? 0,
+        version: (r.version as number) ?? 0,
+        repIds,
+      }];
+    })
   );
 
   const dirtySet = new Set<string>();
@@ -477,15 +493,28 @@ async function incrementalSync(supabase: SupabaseClient, token: string, tenantId
     const items = data.items ?? [];
     if (items.length === 0) break;
 
-    // Dirty if: in dirtySet, own timestamp > per-customer watermark, version advanced, or new customer (Fix 4)
-    const dirtyItems = items.filter(c => {
+    const deletedCustomerIds: string[] = [];
+    const liveItems = items.filter(c => {
+      if (c.audit?.deletedDateTime) { deletedCustomerIds.push(c.id); return false; }
+      return true;
+    });
+    if (deletedCustomerIds.length > 0) {
+      await supabase.from('buildops_customers').delete()
+        .eq('tenant_id', tenantId)
+        .in('buildops_customer_id', deletedCustomerIds);
+    }
+
+    // Dirty if: in dirtySet, own timestamp > per-customer watermark, version advanced, new customer, or no reps synced yet
+    const dirtyItems = liveItems.filter(c => {
       const db = dbCustomerMap.get(c.id);
+      const dbRepIds: string[] = db?.repIds ?? [];
       return dirtySet.has(c.id)
         || (c.audit?.lastUpdatedDateTime ?? 0) > (db?.ts ?? 0)
         || (c.version ?? 0) > (db?.version ?? 0)
-        || !db;
+        || !db
+        || dbRepIds.length === 0;
     });
-    skipped += items.length - dirtyItems.length;
+    skipped += liveItems.length - dirtyItems.length;
 
     const dirtyRepsMap = await fetchRepsForAll(token, tenantId, dirtyItems.map(c => c.id));
     for (const c of dirtyItems) {
@@ -538,7 +567,17 @@ async function incrementalSync(supabase: SupabaseClient, token: string, tenantId
     }
   }
 
-  return { mode: 'incremental', rebuilt, skipped, properties_synced: allPropertyRows.length, representatives_replaced: relevantRepRows.length };
+  let sweptCount: number | 'skipped' = 'skipped';
+  if (doRepSweep) {
+    const toSweep = [...dbCustomerMap.keys()].filter(id => !rebuiltCustomerIds.has(id));
+    const { swept } = await sweepAllReps(supabase, token, tenantId, toSweep);
+    sweptCount = swept;
+    await supabase.from('buildops_tenants')
+      .update({ last_rep_sweep_at: new Date().toISOString() })
+      .eq('buildops_tenant_id', tenantId);
+  }
+
+  return { mode: 'incremental', rebuilt, skipped, properties_synced: allPropertyRows.length, representatives_replaced: relevantRepRows.length, rep_sweep: sweptCount };
 }
 
 // ─── Representative IDs sync helper ──────────────────────────────────────────
@@ -550,12 +589,18 @@ async function updateRepresentativeIds(
 ): Promise<void> {
   if (customerIds.length === 0) return;
 
-  const { data: rows, error } = await supabase
-    .from('buildops_representatives')
-    .select('id, customer_id')
-    .eq('tenant_id', tenantId)
-    .in('customer_id', customerIds);
-  if (error) throw new Error(`rep IDs query: ${error.message}`);
+  const allRows: { id: string; customer_id: string }[] = [];
+  const SELECT_CHUNK = 50;
+  for (let i = 0; i < customerIds.length; i += SELECT_CHUNK) {
+    const { data, error } = await supabase
+      .from('buildops_representatives')
+      .select('id, customer_id')
+      .eq('tenant_id', tenantId)
+      .in('customer_id', customerIds.slice(i, i + SELECT_CHUNK));
+    if (error) throw new Error(`rep IDs query: ${error.message}`);
+    allRows.push(...(data ?? []) as { id: string; customer_id: string }[]);
+  }
+  const rows = allRows;
 
   const byCustomer = new Map<string, string[]>();
   for (const r of (rows ?? []) as { id: string; customer_id: string }[]) {
@@ -578,6 +623,59 @@ async function updateRepresentativeIds(
     const failed = results.find(r => r.error);
     if (failed?.error) throw new Error(`update rep IDs: ${failed.error.message}`);
   }
+}
+
+// ─── Rep sweep ────────────────────────────────────────────────────────────────
+
+async function sweepAllReps(
+  supabase: SupabaseClient,
+  token: string,
+  tenantId: string,
+  customerIds: string[],
+): Promise<{ swept: number }> {
+  if (customerIds.length === 0) return { swept: 0 };
+
+  const { data: dbRepRows } = await supabase
+    .from('buildops_customers')
+    .select('buildops_customer_id, representative_ids')
+    .eq('tenant_id', tenantId)
+    .in('buildops_customer_id', customerIds);
+
+  const dbRepCountMap = new Map(
+    (dbRepRows ?? []).map(r => {
+      const raw = r.representative_ids;
+      const ids = Array.isArray(raw) ? raw as string[] : JSON.parse(typeof raw === 'string' ? raw : '[]') as string[];
+      return [r.buildops_customer_id as string, ids.length];
+    })
+  );
+
+  const apiRepsMap = await fetchRepsForAll(token, tenantId, customerIds);
+
+  // Compare rep COUNT — API rep IDs and DB representative_ids are in different namespaces
+  // (BuildOps UUIDs vs Supabase row UUIDs), so count is the correct signal here.
+  // Existing-rep updates (phone changes) are caught by the DB-side rep.updated_at dirty check.
+  const changedIds: string[] = [];
+  for (const [customerId, apiReps] of apiRepsMap) {
+    const dbCount = dbRepCountMap.get(customerId) ?? 0;
+    if (apiReps.length !== dbCount) {
+      changedIds.push(customerId);
+    }
+  }
+
+  if (changedIds.length === 0) return { swept: 0 };
+
+  const repRows: object[] = [];
+  for (const customerId of changedIds) {
+    for (const r of apiRepsMap.get(customerId) ?? []) {
+      repRows.push(buildRepRow(r, customerId, tenantId));
+    }
+    await supabase.from('buildops_representatives').delete()
+      .eq('tenant_id', tenantId).eq('customer_id', customerId);
+  }
+  if (repRows.length > 0) await batchInsert(supabase, 'buildops_representatives', repRows);
+  await updateRepresentativeIds(supabase, tenantId, changedIds);
+
+  return { swept: changedIds.length };
 }
 
 // ─── Jobs incremental sync ────────────────────────────────────────────────────
