@@ -40,13 +40,15 @@ Fires before the call is answered. Handler: `POST /api/buildops/retell/webhook`.
 
 | Outcome | Condition | Variables set |
 |---|---|---|
-| `found` | Exactly 1 match in `all_numbers` | `identified=true`, `customer_id`, `customer_name`, `property_count`, `property_id` (if 1 property) |
+| `found` | Exactly 1 match in `all_numbers` | `identified=true`, `customer_id`, `customer_name`, `address`, `address_source`, `new_number_detected`, `property_count`, `property_id` (if 1 property), `caller_source_type`, `caller_rep_name`, `rep_property_id`, `rep_property_address` |
 | `multiple_matches` | 2+ matches in `all_numbers` | `identified=false`, `addresses` = JSON array of `{name, id, address}`, `candidates_count` |
-| `not_found` | 0 matches | `identified=false` — agent will call `lookup_customer_fuzzy` |
+| `not_found` | 0 matches | `identified=false`, `new_number_detected=true` — agent will call `lookup_customer_fuzzy` |
 
 When `found` with a single match: `matchedCustomerId` is written to `buildops_inbound_calls` immediately — the agent skips the confirm step.
 
 When `found` and `property_count = 1`: `property_id` is populated so the agent can skip `match_property`.
+
+When `found` and `caller_source_type = "rep"` and `rep_property_id` is non-empty: the caller is a known representative for a specific property — the agent can pre-select that property and skip `match_property` if the caller confirms.
 
 ---
 
@@ -137,14 +139,15 @@ Each Retell custom function has its own dedicated endpoint under `/api/buildops/
 
 Two flows are permitted. All other paths (e.g. an identified caller calling `lookup_customer_fuzzy` to switch accounts) are blocked by the backend.
 
-**Flow 1 — Unknown caller → associate → optionally add rep**
+**Flow 1 — Unknown caller → fuzzy identify → optionally add rep**
 
 ```
 call_inbound (not_found)
   → call_started (session swap UUID → real call_id)
   → lookup_customer_fuzzy (identifies caller against existing account)
+  → [match_property if property_count > 1]
   → prepare_job (job creation)
-  → add_representative (optional — registers caller's phone on the account)
+  → add_representative (opt-in — caller must say yes to save their number)
   → call_ended
 ```
 
@@ -153,7 +156,19 @@ call_inbound (not_found)
 ```
 call_inbound (found — phone matched directly)
   → call_started (session swap)
+  → [match_property if property_count > 1 and no rep_property_id]
   → prepare_job (job creation)
+  → call_ended
+```
+
+**Flow 3 — Identified rep with known property → fast path**
+
+```
+call_inbound (found, caller_source_type="rep", rep_property_id set)
+  → call_started (session swap)
+  → [agent offers rep_property_address, caller confirms — skips match_property]
+  → prepare_job (job creation)
+  → add_representative (opt-in — caller must say yes to save their number)
   → call_ended
 ```
 
@@ -183,11 +198,17 @@ call_inbound
 [Customer confirmed]
 │
 ├── property_count = 1 ──────────────────────────────────────────── SKIP match_property
-└── property_count > 1 ──────────────────────────────────────────── match_property
-    │
-    ├── matched ──────────────────────────────────────────────────── proceed
-    ├── ambiguous ────────────────────────────────────────────────── agent reads candidates, re-call
-    └── not_found ────────────────────────────────────────────────── transfer_call
+└── property_count > 1
+    ├── rep_property_id set ───────────────────────────────────────── PRE-SELECT (agent confirms)
+    │   ├── caller confirms → skip match_property → proceed
+    │   └── caller denies → match_property flow below
+    └── no rep hint (or after "no" to pre-select) ────────────────── match_property
+        ├── matched + caller confirms → proceed
+        ├── matched + caller denies → transfer_call
+        ├── ambiguous / not_found → 1 retry (full address + zip)
+        │   ├── matched + caller confirms → proceed
+        │   ├── matched + caller denies → transfer_call
+        │   └── still ambiguous / not_found → transfer_call
 
 [Property resolved]
 │
@@ -218,6 +239,7 @@ Searches for a customer by name, address, zip, or a previously used phone number
 |---|---|
 | Timeout | 8000 ms |
 | speak_during_execution | `true` ("Let me look that up for you.") |
+| args_only | `false` — **required** so Retell includes `body.call.call_id` for session resolution |
 
 **Payload received:**
 
@@ -281,6 +303,7 @@ Confirms which customer from a `multiple_matches` result. Writes `matchedCustome
 |---|---|
 | Timeout | 5000 ms |
 | speak_during_execution | `false` |
+| args_only | `false` — **required** so Retell includes `body.call.call_id` for session resolution |
 
 **Payload received:**
 
@@ -325,6 +348,7 @@ Fuzzy-matches a spoken service address against the confirmed customer's properti
 |---|---|
 | Timeout | 6000 ms |
 | speak_during_execution | `true` ("Let me find that address.") |
+| args_only | `false` — **required** so Retell includes `body.call.call_id` for session resolution |
 
 **Payload received:**
 
@@ -370,6 +394,7 @@ Validates the account, creates the job in BuildOps, and writes it to `buildops_j
 |---|---|
 | Timeout | 5000 ms |
 | speak_during_execution | `false` |
+| args_only | `false` — **required** so Retell includes `body.call.call_id` for session resolution |
 
 **Payload received:**
 
@@ -389,16 +414,17 @@ Validates the account, creates the job in BuildOps, and writes it to `buildops_j
 }
 ```
 
-> `issue_description` is prefixed with `[Job Created by Clara]\n` before being written to BuildOps.
+> Issue description format written to BuildOps: `[Job Created by Clara]\nCaller: <caller_name> | Callback: <from_number>\n<issue_description>`
 
 **Parameters:**
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `customer_property_id` | string | Yes | BuildOps property UUID (from `match_property` or `property_id` auto-set) |
+| `customer_property_id` | string | Yes | BuildOps property UUID (from `match_property`, `rep_property_id`, or `property_id` auto-set) |
 | `status` | string | No | Initial job status: `Open`, `In Progress`, `On Hold`, `Canceled`, `Complete`. Defaults to `Open` |
 | `needs_review` | boolean | No | Set `true` when `confidence_tier = 2` (flags job for manual review) |
 | `issue_description` | string | No | Caller's description of the issue |
+| `caller_name` | string | No | Name of the person calling — prepended to issue description |
 
 **Pre-checks (in order):**
 1. `matchedCustomerId` present in session — error if not
@@ -444,12 +470,13 @@ Hardcoded defaults:
 
 ### `add_representative`
 
-Creates a new named contact/representative on the BuildOps account and appends their phone to the customer's `all_numbers` for future lookups.
+Creates a new named contact/representative on the BuildOps property and appends their phone to the customer's `all_numbers` for future lookups. Only called when the caller explicitly says YES to saving their number.
 
 | Retell setting | Value |
 |---|---|
 | Timeout | 5000 ms |
 | speak_during_execution | `false` |
+| args_only | `false` — **required** so Retell includes `body.call.call_id` for session resolution |
 
 **Payload received:**
 
@@ -478,14 +505,15 @@ Creates a new named contact/representative on the BuildOps account and appends t
 | `first_name` | string | Yes | Caller's first name |
 | `last_name` | string | Yes | Caller's last name |
 | `email` | string | No | Contact email |
-| `property_id` | string | No | BuildOps property UUID to associate the rep with |
+| `property_id` | string | **Yes** | BuildOps property UUID to associate the rep with (use the `customer_property_id` of the job just created) |
 
 Phone is always taken from `session.caller` (`from_number`) — the agent never asks for it.
 
 Execution order:
-1. Create in BuildOps API (blocking — must succeed)
+1. Create in BuildOps API at `POST /v1/properties/{propertyId}/representatives` (blocking — must succeed)
 2. Mirror to `buildops_representatives` (best-effort)
-3. Append phone to `buildops_customers.all_numbers` (best-effort, immediate effect for future calls)
+3. Append phone to `buildops_customers.all_numbers` with source `rep:cellPhone:<Name>:prop:<propertyId>` (best-effort, immediate effect for future calls)
+4. Append BuildOps rep ID to `buildops_properties.representative_ids` (best-effort)
 
 **Response variables:**
 

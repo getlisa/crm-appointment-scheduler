@@ -294,6 +294,16 @@ export async function createCustomerRepresentative(
   );
 }
 
+export async function createPropertyRepresentative(
+  ctx: BuildOpsContext,
+  propertyId: string,
+  data: { firstName: string; lastName: string; cellPhone?: string | null; landlinePhone?: string | null },
+): Promise<{ id: string }> {
+  return request<{ id: string }>(
+    ctx, 'POST', `/v1/properties/${propertyId}/representatives`, data,
+  );
+}
+
 // ── Paginated jobs list (used by cron incremental sync) ───────────────────────
 
 /**

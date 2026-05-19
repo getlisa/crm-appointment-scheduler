@@ -29,12 +29,12 @@ curl -X POST http://localhost:8080/api/buildops/retell/webhook -H "Content-Type:
 
 ### Case A — Customer not found (phone not in DB)
 ```json
-{"call_inbound":{"dynamic_variables":{"status":"not_found","identified":"false","confidence":"0","customer_id":"","customer_name":"","from_number":"933-024-3839","new_number_detected":"false","address_count":"0","addresses":"[]","multiple_matches":"false"}}}
+{"call_inbound":{"dynamic_variables":{"status":"not_found","identified":"false","confidence":"0","customer_id":"","customer_name":"","from_number":"933-024-3839","new_number_detected":"true","address_count":"0","addresses":"[]","multiple_matches":"false"}}}
 ```
 
 ### Case B — Customer found (phone matches a record)
 ```json
-{"call_inbound":{"dynamic_variables":{"status":"found","identified":"true","confidence":"1.0","customer_id":"08af512c-930d-408e-8cc2-673871b44c14","customer_name":"clara","from_number":"933-024-3839","new_number_detected":"false","address":"2 Church St, Toronto, ON, M5E 1Z3","address_source":"propertyAddress","multiple_matches":"false","property_count":"1","property_id":"039de7b5-1549-4077-9965-7c82308ff9bc"}}}
+{"call_inbound":{"dynamic_variables":{"status":"found","identified":"true","confidence":"1.0","customer_id":"08af512c-930d-408e-8cc2-673871b44c14","customer_name":"clara","from_number":"933-024-3839","new_number_detected":"false","address":"2 Church St, Toronto, ON, M5E 1Z3","address_source":"propertyAddress","multiple_matches":"false","property_count":"1","property_id":"039de7b5-1549-4077-9965-7c82308ff9bc","caller_source_type":"customer","caller_rep_name":"","rep_property_id":"","rep_property_address":""}}}
 ```
 
 ---
@@ -71,22 +71,22 @@ curl -X POST http://localhost:8080/api/buildops/fn/match_property -H "Content-Ty
 
 ## Step 3d — Prepare job
 
-Pass the `property_id` resolved in step 3c (or pre-populated `property_id` from step 2 when `property_count` is 1).
+Pass the `property_id` resolved in step 3c (or pre-populated `property_id` from step 2 when `property_count` is 1, or `rep_property_id` when the caller is a known rep for that property).
 
 ```
-curl -X POST http://localhost:8080/api/buildops/fn/prepare_job -H "Content-Type: application/json" -d "{\"call\": {\"call_id\": \"test-call-001\"}, \"args\": {\"customer_property_id\": \"039de7b5-1549-4077-9965-7c82308ff9bc\"}}"
+curl -X POST http://localhost:8080/api/buildops/fn/prepare_job -H "Content-Type: application/json" -d "{\"call\": {\"call_id\": \"test-call-001\"}, \"args\": {\"customer_property_id\": \"039de7b5-1549-4077-9965-7c82308ff9bc\", \"caller_name\": \"John Smith\", \"issue_description\": \"HVAC unit not cooling\"}}"
 ```
 
 **Expected response**
 ```json
-{"result":"{\"status\":\"created\",\"job_id\":\"8d7033db-1231-46fd-98e3-beb55573fd6c\",\"job_number\":\"5143\",\"needs_review\":false,\"summary\":{\"property_address\":{\"zip\":\"M5E 1Z3\",\"city\":\"Toronto\",\"line1\":\"2 Church St\",\"line2\":null,\"state\":\"ON\"},\"job_status\":\"Open\",\"task_count\":0}}"}
+{"result":"{\"status\":\"created\",\"job_id\":\"8d7033db-1231-46fd-98e3-beb55573fd6c\",\"job_number\":\"5143\",\"needs_review\":false,\"summary\":{\"property_address\":{\"zip\":\"M5E 1Z3\",\"city\":\"Toronto\",\"line1\":\"2 Church St\",\"line2\":null,\"state\":\"ON\"},\"job_status\":\"Open\"}}"}
 ```
 
 ---
 
-## Step 3e — Add representative (optional)
+## Step 3e — Add representative (opt-in)
 
-Only needed when `new_number_detected` is `true` or the caller volunteers a new contact.
+Only called when `new_number_detected` is `true` AND the caller explicitly says YES to saving their number. `property_id` is required — use the `customer_property_id` from the job just created.
 
 ```
 curl -X POST http://localhost:8080/api/buildops/fn/add_representative -H "Content-Type: application/json" -d "{\"call\": {\"call_id\": \"test-call-001\"}, \"args\": {\"first_name\": \"John\", \"last_name\": \"Doe\", \"property_id\": \"039de7b5-1549-4077-9965-7c82308ff9bc\"}}"
@@ -405,5 +405,5 @@ No job creation occurs here — that already happened in `prepare_job` during th
 | 3 | `POST /fn/confirm_customer` | Agent — when any step returns `multiple_matches` | `handleConfirmCustomer` | `buildops_inbound_calls`, `buildops_customers` | — |
 | 4 | `POST /fn/match_property` | Agent — when confirmed customer has `property_count > 1` | `handleMatchProperty` | `buildops_inbound_calls`, `buildops_customers`, `buildops_properties` | — |
 | 5 | `POST /fn/prepare_job` | Agent — once customer + property are both resolved | `handlePrepareJob` | `buildops_inbound_calls`, `buildops_customers`, `buildops_properties`, `buildops_jobs` | BuildOps `GET /v1/customers/{id}`, `POST /v1/jobs` |
-| 6 | `POST /fn/add_representative` | Agent — when `new_number_detected: true` or caller volunteers a new contact | `handleAddRepresentative` | `buildops_representatives`, `buildops_customers` | BuildOps `POST /v1/representatives` |
+| 6 | `POST /fn/add_representative` | Agent — when `new_number_detected: true` and caller says YES to saving their number | `handleAddRepresentative` | `buildops_representatives`, `buildops_customers`, `buildops_properties` | BuildOps `POST /v1/properties/{id}/representatives` |
 | 7 | `POST /retell/webhook` (`call_ended`) | Retell — automatic on call disconnect / end_call / transfer complete | `retell/index.ts` | `buildops_inbound_calls` | — |

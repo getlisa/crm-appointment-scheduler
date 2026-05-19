@@ -7,7 +7,8 @@
 
 import { getCustomerById, appendToCustomerAllNumbers } from '../db/customers.js';
 import { createRepresentative } from '../db/representatives.js';
-import { createCustomerRepresentative } from '../client.js';
+import { appendToPropertyRepresentativeIds } from '../db/properties.js';
+import { createCustomerRepresentative, createPropertyRepresentative } from '../client.js';
 import type { InboundCallRow, BuildOpsContext, RetellFunctionResult } from '../types.js';
 
 // ── Save caller's current phone number as a representative on the account ─────
@@ -114,16 +115,19 @@ export async function handleAddRepresentative(
   if (!firstName || !lastName) {
     return { result: 'error: first_name and last_name are required' };
   }
+  if (!propertyId) {
+    return { result: 'error: property_id is required — pass the customer_property_id of the job being booked' };
+  }
 
   const customer = await getCustomerById(session.tenantId, session.matchedCustomerId);
   if (!customer) {
     return { result: 'error: could not load customer record' };
   }
 
-  // 1. Create in BuildOps API (blocking — rep must exist in the real account)
+  // 1. Create in BuildOps API under the property (blocking — rep must exist in the real account)
   let buildopsRep: { id: string };
   try {
-    buildopsRep = await createCustomerRepresentative(ctx, customer.buildopsCustomerId, {
+    buildopsRep = await createPropertyRepresentative(ctx, propertyId, {
       firstName,
       lastName,
       cellPhone: phone ?? null,
@@ -144,15 +148,19 @@ export async function handleAddRepresentative(
     email: email ?? null,
   }).catch(err => console.error('[representative] local DB write failed:', err));
 
-  // 3. Append phone to all_numbers so future lookups find them immediately (best-effort)
+  // 3. Append phone to all_numbers with property-encoded source (best-effort)
   if (phone) {
     appendToCustomerAllNumbers(
       session.tenantId,
       customer.id,
       phone,
-      `rep:cellPhone:${firstName} ${lastName}`,
+      `rep:cellPhone:${firstName} ${lastName}:prop:${propertyId}`,
     ).catch(err => console.error('[representative] all_numbers append failed:', err));
   }
+
+  // 4. Append rep ID to the property's representative_ids (best-effort)
+  appendToPropertyRepresentativeIds(propertyId, buildopsRep.id)
+    .catch(err => console.error('[representative] property rep_ids append failed:', err));
 
   return {
     result: JSON.stringify({

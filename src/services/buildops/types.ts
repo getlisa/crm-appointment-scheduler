@@ -39,6 +39,8 @@ export interface CustomerRow {
   normalizedPhoneSecondary: string | null;
   priceBookId: string | null;
   allNumbers: string[];
+  /** Parallel to allNumbers — source tag for each phone (e.g. "rep:cellPhone:John Smith:prop:uuid") */
+  allNumbersSources: string[];
   /** FK → buildops_properties.id. IDs only — use getPropertiesByIds() to load full data. */
   propertyIds: string[];
   /** FK → buildops_representatives.id. IDs only — use a representatives lookup to load full data. */
