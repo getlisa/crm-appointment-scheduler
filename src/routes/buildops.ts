@@ -136,7 +136,7 @@ router.get('/admin/tenants', async (_req, res) => {
 
 // ── Retell lifecycle webhook ──────────────────────────────────────────────────
 
-function buildInboundResponse(status: 'not_found' | 'error', fromNumber: string): object {
+function buildInboundResponse(status: 'not_found' | 'error', fromNumber: string, newNumberDetected = false): object {
   return {
     call_inbound: {
       override_agent_id: env.retellLlmId ?? undefined,
@@ -147,7 +147,7 @@ function buildInboundResponse(status: 'not_found' | 'error', fromNumber: string)
         customer_id: '',
         customer_name: '',
         from_number: fromNumber,
-        new_number_detected: 'false',
+        new_number_detected: String(newNumberDetected),
         address_count: '0',
         addresses: '[]',
         multiple_matches: 'false',
@@ -227,7 +227,7 @@ router.post('/retell/webhook', async (req, res) => {
       console.log('[buildops] phone lookup', { phoneLast10, matchCount: matches.length });
 
       if (matches.length === 0) {
-        const notFoundResp = buildInboundResponse('not_found', fromNumber);
+        const notFoundResp = buildInboundResponse('not_found', fromNumber, true);
         console.log('[buildops] call_inbound resp', notFoundResp);
         res.json(notFoundResp);
         return;
