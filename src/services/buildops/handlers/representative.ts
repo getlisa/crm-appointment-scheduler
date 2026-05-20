@@ -106,10 +106,10 @@ export async function handleAddRepresentative(
     return { result: 'error: no customer confirmed — complete customer lookup first' };
   }
 
-  const firstName = args.first_name as string | undefined;
-  const lastName = args.last_name as string | undefined;
+  const firstName = (args.first_name as string | undefined)?.trim();
+  const lastName  = (args.last_name  as string | undefined)?.trim();
   const phone = session.caller ?? undefined;
-  const email = args.email as string | undefined;
+  const email = (args.email as string | undefined)?.trim() || undefined;
   const propertyId = args.property_id as string | undefined;
 
   if (!firstName || !lastName) {
@@ -131,6 +131,7 @@ export async function handleAddRepresentative(
       firstName,
       lastName,
       cellPhone: phone ?? null,
+      email: email ?? null,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

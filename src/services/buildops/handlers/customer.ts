@@ -79,13 +79,35 @@ export async function handleGetProperties(
 const MATCH_CONFIDENT = 0.60;
 const MATCH_AMBIG_GAP = 0.15;
 
+function recallRatio(spoken: string, stored: string): number {
+  const tokenize = (s: string): Set<string> => new Set(s.split(/\s+/).filter(Boolean));
+  const ts = tokenize(spoken.toLowerCase());
+  const tb = tokenize(stored.toLowerCase());
+  if (tb.size === 0) return ts.size === 0 ? 1 : 0;
+  let hit = 0;
+  for (const t of tb) if (ts.has(t)) hit++;
+  return hit / tb.size;
+}
+
 function scoreProperty(spoken: string, prop: PropertyRow): number {
   const addr = prop.address;
+  const normSpoken = normalizeAddress(spoken);
+
   const line1Score = addr.line1
-    ? tokenSetRatio(normalizeAddress(spoken), normalizeAddress(addr.line1))
+    ? Math.max(
+        tokenSetRatio(normSpoken, normalizeAddress(addr.line1)),
+        recallRatio(normSpoken, normalizeAddress(addr.line1)),
+      )
     : 0;
-  const cityBonus = addr.city && spoken.toLowerCase().includes(addr.city.toLowerCase()) ? 0.1 : 0;
-  const zipBonus  = addr.zip  && spoken.includes(addr.zip) ? 0.1 : 0;
+
+  const spokenFlat = spoken.toLowerCase().replace(/[\s-]/g, '');
+  const cityBonus = addr.city && (
+    spoken.toLowerCase().includes(addr.city.toLowerCase()) ||
+    spokenFlat.includes(addr.city.toLowerCase().replace(/[\s-]/g, ''))
+  ) ? 0.1 : 0;
+
+  const zipBonus = addr.zip && spoken.includes(addr.zip) ? 0.1 : 0;
+
   return Math.min(line1Score + cityBonus + zipBonus, 1);
 }
 

@@ -107,12 +107,23 @@ const USPS_ABBR: Record<string, string> = {
   APARTMENT: 'APT', SUITE: 'STE', FLOOR: 'FL', BUILDING: 'BLDG',
 };
 
+const WRITTEN_NUMBERS: Array<[RegExp, string]> = [
+  [/\bNINE\b/g, '9'],  [/\bEIGHT\b/g, '8'], [/\bSEVEN\b/g, '7'],
+  [/\bSIX\b/g, '6'],   [/\bFIVE\b/g, '5'],  [/\bFOUR\b/g, '4'],
+  [/\bTHREE\b/g, '3'], [/\bTWO\b/g, '2'],   [/\bONE\b/g, '1'],
+  [/\bZERO\b/g, '0'],
+];
+
 export function normalizeAddress(line: string): string {
-  return line
+  let s = line
     .toUpperCase()
     .replace(/[.,#]/g, '')
     .replace(/\s+/g, ' ')
-    .trim()
+    .trim();
+
+  for (const [re, digit] of WRITTEN_NUMBERS) s = s.replace(re, digit);
+
+  return s
     .split(' ')
     .map(token => USPS_ABBR[token] ?? token)
     .join(' ');
