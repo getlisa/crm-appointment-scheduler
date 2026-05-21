@@ -125,7 +125,7 @@ export async function handlePrepareJob(
   const needsReview = !!(args.needs_review);
   const callerName = (args.caller_name as string | undefined)?.trim() || 'Unknown';
   const callbackNumber = session.caller ?? '';
-  const callerLine = `Callback: ${callbackNumber}`;
+  const callerLine = `Caller Name: ${callerName}\nCallback Number:- ${callbackNumber}`;
   const rawIssueDescription = (args.issue_description as string | undefined)?.trim() ?? '';
   const issueDescription = rawIssueDescription
     ? `[Job Created by Clara]\n${callerLine}\n${rawIssueDescription}`
