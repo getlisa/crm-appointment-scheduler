@@ -106,6 +106,29 @@ export async function appendToCustomerAllNumbers(
     .eq('id', customerId);
 }
 
+export async function appendToCustomerRepresentativeIds(
+  tenantId: string,
+  customerId: string,
+  repId: string,
+): Promise<void> {
+  const { data } = await supabase
+    .from('buildops_customers')
+    .select('representative_ids')
+    .eq('tenant_id', tenantId)
+    .eq('id', customerId)
+    .single();
+
+  const current: string[] =
+    (data as { representative_ids: string[] } | null)?.representative_ids ?? [];
+  if (current.includes(repId)) return;
+
+  await supabase
+    .from('buildops_customers')
+    .update({ representative_ids: [...current, repId] })
+    .eq('tenant_id', tenantId)
+    .eq('id', customerId);
+}
+
 /**
  * Returns a deduplicated set of customer candidates for fuzzy matching.
  * Runs two sub-queries: one by name/zip against buildops_customers, one by

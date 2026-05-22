@@ -1,14 +1,14 @@
 # BuildOps Integration — Full Session Log
 
 **Branch**: `buildops_integration` | **Latest commit**: `502b740`
-**Working tree**: 11 modified files + 2 new untracked files — not yet committed.
+**Working tree**: uncommitted changes from sessions 2026-05-20s2 and 2026-05-21.
 
 ---
 
 ## Key Constants
 ```
 Tenant inbound:   +19842056510  |  buildops_id: 470f824e-94a8-41c1-9ef6-c87bbe099dd2
-clara:            id=08af512c-930d-408e-8cc2-673871b44c14  phone=+19330243839  propertyId=039de7b5-1549-4077-9965-7c82308ff9bc
+clara:            id=08af512c-930d-408e-8cc2-673871b44c14  phone=+19330243834  propertyId=039de7b5-1549-4077-9965-7c82308ff9bc
 Clara Customer:   id=dc45fcd3-e445-4c72-837e-005f89502161  buildops_id=3e34ee30-60e4-4017-ab5b-f7c1c7cb6426
                   phone=+14155201480  propertyId=6a62f305-8a22-4ef5-be19-bd8f8d8282f3
 ```
@@ -32,15 +32,7 @@ CREATE INDEX IF NOT EXISTS idx_buildops_properties_rep_ids
 
 Note: `buildops_inbound_calls` migration from 2026-05-19 (`session_id`/`retell_call_id` split) was included in earlier commit `1de40e7`.
 
-### B. Fix fn/* `callId` extraction — `src/routes/buildops.ts`
-
-All 5 fn/* handlers must read `call_id` from root body first:
-```typescript
-const callId = ((body.call_id ?? body.call?.call_id) as string | undefined);
-```
-Affected: `lookup_customer_fuzzy`, `confirm_customer`, `match_property`, `prepare_job`, `add_representative`.
-
-### C. Commit + deploy
+### B. Commit + deploy
 ```bash
 git add -A
 git commit -m "caller source awareness, property-scoped reps, issue description improvements"
@@ -48,21 +40,29 @@ git push origin buildops_integration
 # merge buildops_integration → main → Vercel auto-deploys
 ```
 
-### D. Retell dashboard updates
+### C. Retell dashboard updates
 - All 5 custom functions: set **`args_only = false`** (required — without it `body.call.call_id` is missing and all fn calls fail with `error: session not found`)
-- `prepare_job`: add `caller_name` parameter (string, optional); remove `task_count` from response variables if still present
+- `prepare_job`: add `caller_name` parameter (string, optional) — **code already implemented in `handlers/job.ts`; dashboard declaration is the only remaining step**; remove `task_count` from response variables if still present
+- `add_representative` input parameters — replace with:
+  | Parameter | Type | Required |
+  |-----------|------|----------|
+  | `first_name` | string | yes |
+  | `last_name` | string | yes |
+  | `property_id` | string | yes |
+  | `email` | string | no |
+  Response variables: keep `name` (combined string), `status`, `representative_id`.
 - Paste updated `retell/retell_single_prompt.txt` into the Retell LLM agent and save
 
-### E. Verify production
+### D. Verify production
 ```bash
 TEST_BASE_URL=https://crm-appointment-scheduler.vercel.app/api/buildops npx tsx tests/buildops/test_job_creation.ts
 ```
 Watch for: `prepare_job start` shows `customerPropertyId` populated; `resolveSession ok` shows `retellCallId: 'call_xxx...'`.
 
-### F. BuildOps webhook receiver (long-pending)
+### E. BuildOps webhook receiver (long-pending)
 `POST /api/buildops/webhook` — Representative `created`/`updated` events → append phones to `all_numbers`.
 
-### G. Post-call analysis (long-pending)
+### F. Post-call analysis (long-pending)
 Register Retell `call_analyzed` webhook → write to `buildops_call_logs`: `retell_call_id`, `buildops_job_id`, `call_type`, `job_type`, `dispatch_outcome`, `caller_sentiment`, `overtime_authorized`, `caller_name`, `company_name`, `callback_number`, `service_address`, `issue_summary`, `call_summary`, `call_successful`, `user_sentiment`, `recording_url`, `transcript`.
 
 ---
@@ -172,6 +172,52 @@ Parsed in `call_inbound` to extract rep name and property UUID. Old format `rep:
 
 - **Docs updated**: `docs/buildops/call-flow.md` and `docs/buildops/endpoint_responses.md` — `args_only: false` on all 5 functions, updated variable tables, updated flow diagram, Flow 3 added, `prepare_job`/`add_representative` tables updated, `not_found` flag corrected.
 
+### Session 2026-05-22
+
+- **Bug — `buildops_representatives` never written (wrong table name)**: All 5 Supabase queries in `src/services/buildops/db/representatives.ts` targeted `'representatives'` instead of `'buildops_representatives'`. Mid-call rep creation, phone lookups, and uniqueness checks were silently going to the wrong table. Cron sync was unaffected (used `batchInsert` with the correct name). Fixed by replacing all 5 occurrences.
+  **File:** `src/services/buildops/db/representatives.ts`
+
+- **Bug — wrong `customerId` in rep handlers** (FK violation exposed by above fix): Both `handleSaveCallerNumber` and `handleAddRepresentative` passed `customer.id` (Supabase UUID) to `createRepresentative()`. `buildops_representatives.customer_id` has a FK constraint referencing `buildops_customers.buildops_customer_id` (BuildOps text UUID — confirmed from DB data). Fixed by using `customer.buildopsCustomerId` in both call sites.
+  **File:** `src/services/buildops/handlers/representative.ts`
+
+- **`issue_description` — `caller_name` restored**: `handlePrepareJob` already extracted `caller_name` from args but discarded it (regression from 2026-05-21). Format updated to:
+  ```
+  [Job Created by Clara]
+  Caller Name: <name>
+  Callback Number:- <number>
+  <issue_description>
+  ```
+  `caller_name` defaults to `"Unknown"`. **Retell dashboard action still required**: add `caller_name` as optional string input parameter to `prepare_job`.
+  **File:** `src/services/buildops/handlers/job.ts`
+
+- **Rep greeting updated to "property representative"**: Prompt now greets rep callers as "property representative for [address]" (falls back to "representative for [customer_name]" when `rep_property_address` is empty). `handleAddRepresentative` now chains `appendToCustomerRepresentativeIds` after `createRepresentative` returns, so `buildops_customers.representative_ids` is updated immediately on mid-call rep creation (previously only populated by cron). New DB helper: `appendToCustomerRepresentativeIds(tenantId, customerId, repId)`.
+  **Files:** `src/services/buildops/db/customers.ts`, `src/services/buildops/handlers/representative.ts`, `retell/retell_single_prompt.txt`
+
+### Session 2026-05-21
+
+- **`match_property` — recall-based scoring** (`src/services/buildops/handlers/customer.ts`):
+  - Added `recallRatio()` — fraction of stored line1 tokens found in spoken address; unaffected by extra garbage tokens from LLM context.
+  - `scoreProperty` now uses `max(tokenSetRatio, recallRatio)` so "Twenty Nine Palms 92277" correctly scores against stored "29 PALMS".
+  - City bonus now also checks flat string (spaces/hyphens collapsed) to match "Twentynine Palms" vs spoken "Twenty Nine Palms".
+
+- **`normalizeAddress` — single-digit word normalization** (`src/services/buildops/fuzzy-search.ts`):
+  - Added `WRITTEN_NUMBERS` table (ZERO–NINE only; no two-digit words) applied before USPS token map.
+  - "FIVE OAK ST" → "5 OAK ST" before scoring.
+
+- **`add_representative` — email wired through**:
+  - `createPropertyRepresentative()` signature now includes `email?: string | null` (`src/services/buildops/client.ts`).
+  - `handleAddRepresentative` applies `.trim()` to firstName/lastName, passes `email` to the API call (`src/services/buildops/handlers/representative.ts`).
+
+- **`prepare_job` issue_description — removed caller name line** (`src/services/buildops/handlers/job.ts`):
+  - Format changed from `[Job Created by Clara]\nCaller: <name> | Callback: <number>\n<issue>` to `[Job Created by Clara]\nCallback: <number>\n<issue>`.
+
+- **Prompt — 5 changes** (`retell/retell_single_prompt.txt`):
+  1. **Property selection**: `property_count = 1` always confirms address on file and uses pre-set `property_id`. `property_count > 1` never pre-confirms — always asks "Which address would you like service at today?".
+  2. **match_property not_found after retry**: agent now transfers ("I'm having trouble locating that address") instead of collecting manually.
+  3. **`caller_name` in prepare_job**: use `{{caller_rep_name}}` for reps, collected personal name for others, "Unknown" as fallback. Explicit `Do NOT use {{customer_name}}` rule.
+  4. **Job creation confirmation**: agent says "Your job number is [X]" after `prepare_job` returns `status: created`.
+  5. **Rep opt-in expanded**: triggers for both `caller_source_type: customer` (primary account number) AND `new_number_detected: true` (unknown number), not only fuzzy-identified callers. Collects email (optional), confirms name+email before calling `add_representative`.
+
 ---
 
 ## All Files Changed (cumulative)
@@ -179,16 +225,19 @@ Parsed in `call_inbound` to extract rep name and property UUID. Old format `rep:
 | File | Last touched |
 |------|-------------|
 | `src/routes/buildops.ts` | 2026-05-20s2 — `new_number_detected` fix; source parsing + 4 new dynamic vars |
-| `src/services/buildops/client.ts` | 2026-05-20s2 — `createPropertyRepresentative()` added |
-| `src/services/buildops/db/customers.ts` | 2026-05-20s2 — `mapRow()` exposes `allNumbersSources` |
+| `src/services/buildops/client.ts` | 2026-05-21 — `email` added to `createPropertyRepresentative()` |
+| `src/services/buildops/db/customers.ts` | 2026-05-22 — `appendToCustomerRepresentativeIds()` added |
 | `src/services/buildops/db/properties.ts` | 2026-05-20s2 — `appendToPropertyRepresentativeIds()` added |
 | `src/services/buildops/db/inbound-calls.ts` | 2026-05-19 — `session_id`/`retell_call_id` split |
-| `src/services/buildops/handlers/job.ts` | 2026-05-20s2 — `caller_name` + Callback line in issue_description |
-| `src/services/buildops/handlers/representative.ts` | 2026-05-20s2 — requires `property_id`; property endpoint; `:prop:` source; rep_ids append |
+| `src/services/buildops/handlers/customer.ts` | 2026-05-21 — `recallRatio` + updated `scoreProperty` |
+| `src/services/buildops/handlers/job.ts` | 2026-05-22 — caller_name restored in issue_description (Caller Name + Callback Number format) |
+| `src/services/buildops/db/representatives.ts` | 2026-05-22 — table name fix (`'representatives'` → `'buildops_representatives'`, 5 occurrences) |
+| `src/services/buildops/handlers/representative.ts` | 2026-05-22 — `customerId` fix + `appendToCustomerRepresentativeIds` chained after rep creation |
 | `src/services/buildops/handlers/fuzzy-lookup.ts` | 2026-05-18 — cross-account guard |
+| `src/services/buildops/fuzzy-search.ts` | 2026-05-21 — `WRITTEN_NUMBERS` (0-9) in `normalizeAddress` |
 | `src/services/buildops/types.ts` | 2026-05-20s2 — `allNumbersSources: string[]` in `CustomerRow` |
 | `src/services/buildops/supabase/buildops-cron/index.ts` | 2026-05-19 — rep detection overhaul + deleted resource handling |
-| `retell/retell_single_prompt.txt` | 2026-05-20s2 — all prompt changes (moved from `docs/buildops/`) |
+| `retell/retell_single_prompt.txt` | 2026-05-22 — rep greeting updated to "property representative for [address]" |
 | `docs/buildops/call-flow.md` | 2026-05-20s2 — args_only, variables table, flow diagram, Flow 3 |
 | `docs/buildops/endpoint_responses.md` | 2026-05-20s2 — not_found flag, found vars, prepare_job curl, add_rep trigger |
 | `migrations/buildops/20260520_002_property_rep_ids.sql` | 2026-05-20s2 — new migration |

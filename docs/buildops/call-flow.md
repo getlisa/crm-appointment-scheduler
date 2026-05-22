@@ -139,7 +139,7 @@ Each Retell custom function has its own dedicated endpoint under `/api/buildops/
 
 Two flows are permitted. All other paths (e.g. an identified caller calling `lookup_customer_fuzzy` to switch accounts) are blocked by the backend.
 
-**Flow 1 — Unknown caller → fuzzy identify → optionally add rep**
+**Flow 1 — Unknown caller → fuzzy identify → optionally save as rep**
 
 ```
 call_inbound (not_found)
@@ -147,28 +147,31 @@ call_inbound (not_found)
   → lookup_customer_fuzzy (identifies caller against existing account)
   → [match_property if property_count > 1]
   → prepare_job (job creation)
-  → add_representative (opt-in — caller must say yes to save their number)
+  → rep opt-in (new_number_detected=true — agent asks, caller must say YES)
+    → add_representative
   → call_ended
 ```
 
-**Flow 2 — Identified caller → job**
+**Flow 2 — Identified customer → job → optionally save as rep**
 
 ```
-call_inbound (found — phone matched directly)
+call_inbound (found, caller_source_type="customer")
   → call_started (session swap)
   → [match_property if property_count > 1 and no rep_property_id]
   → prepare_job (job creation)
+  → rep opt-in (caller_source_type="customer" — agent informs not saved as rep, asks)
+    → add_representative (if caller says YES)
   → call_ended
 ```
 
-**Flow 3 — Identified rep with known property → fast path**
+**Flow 3 — Identified rep with known property → fast path, no opt-in**
 
 ```
 call_inbound (found, caller_source_type="rep", rep_property_id set)
   → call_started (session swap)
   → [agent offers rep_property_address, caller confirms — skips match_property]
   → prepare_job (job creation)
-  → add_representative (opt-in — caller must say yes to save their number)
+  → [rep opt-in skipped — caller is already a saved representative]
   → call_ended
 ```
 
@@ -220,7 +223,12 @@ call_inbound
     ├── priceBookId missing ─────────────────────────────────────── error (re-run sync)
     │
     └── job created in BuildOps + written to buildops_jobs immediately
-        └── if new_number_detected → add_representative (optional)
+        └── rep opt-in check:
+            ├── caller_source_type = "rep" → skip (already a representative)
+            ├── caller_source_type = "customer" → agent informs + asks to save as rep
+            └── new_number_detected = true → agent informs + asks to save as rep
+                └── caller says YES → collect first_name, last_name, email (optional)
+                                   → confirm details → add_representative
 ```
 
 ---
@@ -342,7 +350,7 @@ Confirms which customer from a `multiple_matches` result. Writes `matchedCustome
 
 ### `match_property`
 
-Fuzzy-matches a spoken service address against the confirmed customer's properties using token-set ratio + city/zip bonuses. Returns the property UUID needed for `prepare_job`.
+Fuzzy-matches a spoken service address against the confirmed customer's properties. Scoring uses `max(tokenSetRatio, recallRatio)` + city/zip bonuses. The recall metric (fraction of stored line1 tokens present in the spoken address) is robust to extra LLM-context tokens and word-form variations (e.g. "Twenty Nine Palms" vs stored "29 PALMS"). Returns the property UUID needed for `prepare_job`.
 
 | Retell setting | Value |
 |---|---|
@@ -382,7 +390,7 @@ Fuzzy-matches a spoken service address against the confirmed customer's properti
 | `identified` | `$.identified` | `not_found` | Always `false` |
 | `message` | `$.message` | `not_found` | Always `address_not_matched` |
 
-Scores ≥ 0.60 → `matched`. Scores where top-2 gap < 0.15 → `ambiguous`. Below 0.60 → `not_found` + session status set to `handed_off`. No properties on customer → `no_properties`.
+Scores ≥ 0.60 → `matched`. Top-2 gap < 0.15 → `ambiguous`. Below 0.60 → `not_found` + session status set to `handed_off`. No properties on customer → `no_properties`. Spoken number words (ONE–NINE, ZERO) are normalised to digits before scoring.
 
 ---
 
@@ -414,7 +422,14 @@ Validates the account, creates the job in BuildOps, and writes it to `buildops_j
 }
 ```
 
-> Issue description format written to BuildOps: `[Job Created by Clara]\nCaller: <caller_name> | Callback: <from_number>\n<issue_description>`
+> Issue description format written to BuildOps:
+> ```
+> [Job Created by Clara]
+> Caller Name: <caller_name>
+> Callback Number:- <from_number>
+> <issue_description>
+> ```
+> `caller_name` defaults to `"Unknown"` if not provided. Requires `caller_name` declared as an optional string input parameter in the Retell dashboard.
 
 **Parameters:**
 

@@ -43,7 +43,7 @@ export async function findRepsByPhone(
   phoneLast10: string,
 ): Promise<RepresentativeRow[]> {
   const { data, error } = await supabase
-    .from('representatives')
+    .from('buildops_representatives')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('is_active', true)
@@ -67,7 +67,7 @@ export async function getRepsByCustomer(
   customerId: string,
 ): Promise<RepresentativeRow[]> {
   const { data, error } = await supabase
-    .from('representatives')
+    .from('buildops_representatives')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('customer_id', customerId)
@@ -89,7 +89,7 @@ export async function getRepsByProperty(
   propertyId: string,
 ): Promise<RepresentativeRow[]> {
   const { data, error } = await supabase
-    .from('representatives')
+    .from('buildops_representatives')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('property_id', propertyId)
@@ -118,7 +118,7 @@ async function resolveUniqueName(
   const baseLast = lastName.trim();
 
   const { data } = await supabase
-    .from('representatives')
+    .from('buildops_representatives')
     .select('first_name, last_name')
     .eq('customer_id', customerId)
     .ilike('first_name', firstName.trim())
@@ -167,7 +167,7 @@ export async function createRepresentative(
   );
 
   const { data, error } = await supabase
-    .from('representatives')
+    .from('buildops_representatives')
     .insert({
       tenant_id: input.tenantId,
       customer_id: input.customerId,

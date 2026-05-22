@@ -1,15 +1,20 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fs from 'fs';
+import { createClient } from '@supabase/supabase-js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
-const CLIENT_ID = process.env.CLIENT_ID!;
+const CLIENT_ID     = process.env.CLIENT_ID!;
 const CLIENT_SECRET = process.env.CLIENT_SECRET!;
-const TENANT_ID = process.env.TENANT_ID!;
-const BASE_URL = 'https://public-api.live.buildops.com/v1';
+const TENANT_ID     = process.env.TENANT_ID!;
+const BASE_URL      = 'https://public-api.live.buildops.com/v1';
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+);
 
 // Usage: node get_customer_properties.ts <inboundPhoneNumber>
 const INBOUND_PHONE = process.argv[2];
@@ -25,44 +30,19 @@ async function getAccessToken(): Promise<string> {
     body: JSON.stringify({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, tenantId: TENANT_ID }),
   });
   if (!res.ok) throw new Error(`Auth failed: ${res.status}`);
-  const data = await res.json();
-  return data.access_token;
+  return (await res.json()).access_token;
 }
 
-function parseCSVLine(line: string): string[] {
-  const cols: string[] = [];
-  let cur = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
-      else inQuotes = !inQuotes;
-    } else if (ch === ',' && !inQuotes) {
-      cols.push(cur); cur = '';
-    } else {
-      cur += ch;
-    }
-  }
-  cols.push(cur);
-  return cols;
-}
-
-function lookupCustomerByPhone(phone: string): { id: string; name: string } {
-  const csvPath = path.resolve(__dirname, '../output/customers.csv');
-  const lines = fs.readFileSync(csvPath, 'utf-8').trim().split('\n');
-  const headers = lines[0].split(',');
-  const idIdx = headers.indexOf('id');
-  const nameIdx = headers.indexOf('name');
-  const phoneIdx = headers.indexOf('phonePrimary');
-
-  for (let i = 1; i < lines.length; i++) {
-    const cols = parseCSVLine(lines[i]);
-    if (cols[phoneIdx] === phone) {
-      return { id: cols[idIdx], name: cols[nameIdx] };
-    }
-  }
-  throw new Error(`No customer found with phone "${phone}" in customers.csv`);
+async function lookupCustomerByPhone(phone: string): Promise<{ id: string; name: string }> {
+  const digits = phone.replace(/\D/g, '').slice(-10);
+  const { data } = await supabase
+    .from('buildops_customers')
+    .select('buildops_customer_id, name')
+    .eq('tenant_id', TENANT_ID)
+    .contains('all_numbers', [digits])
+    .maybeSingle();
+  if (!data) throw new Error(`No customer found with phone "${phone}" in buildops_customers`);
+  return { id: data.buildops_customer_id as string, name: data.name as string };
 }
 
 async function getCustomerAddresses(token: string, customerId: string) {
@@ -90,7 +70,7 @@ async function main() {
   const token = await getAccessToken();
   console.log('Token acquired.');
 
-  const customer = lookupCustomerByPhone(INBOUND_PHONE);
+  const customer = await lookupCustomerByPhone(INBOUND_PHONE);
   console.log(`Customer: "${customer.name}" (id: ${customer.id})\n`);
 
   const [addresses, properties] = await Promise.all([

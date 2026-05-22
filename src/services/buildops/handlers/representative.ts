@@ -5,7 +5,7 @@
  * Both append the new phone to all_numbers immediately so future calls identify correctly.
  */
 
-import { getCustomerById, appendToCustomerAllNumbers } from '../db/customers.js';
+import { getCustomerById, appendToCustomerAllNumbers, appendToCustomerRepresentativeIds } from '../db/customers.js';
 import { createRepresentative } from '../db/representatives.js';
 import { appendToPropertyRepresentativeIds } from '../db/properties.js';
 import { createCustomerRepresentative, createPropertyRepresentative } from '../client.js';
@@ -50,7 +50,7 @@ export async function handleSaveCallerNumber(
   try {
     savedRep = await createRepresentative({
       tenantId: session.tenantId,
-      customerId: customer.id,
+      customerId: customer.buildopsCustomerId,
       firstName,
       lastName,
       cellPhone: phoneToSave,
@@ -138,15 +138,20 @@ export async function handleAddRepresentative(
     return { result: `error: could not create representative in BuildOps — ${msg}` };
   }
 
-  // 2. Mirror to local Supabase (best-effort)
+  // 2. Mirror to local Supabase; on success append rep ID to customer.representative_ids (best-effort)
   createRepresentative({
     tenantId: session.tenantId,
-    customerId: customer.id,
+    customerId: customer.buildopsCustomerId,
     propertyId: propertyId ?? null,
     firstName,
     lastName,
     cellPhone: phone ?? null,
     email: email ?? null,
+  }).then(supabaseRep => {
+    if (supabaseRep) {
+      appendToCustomerRepresentativeIds(session.tenantId, customer.id, supabaseRep.id)
+        .catch(err => console.error('[representative] customer rep_ids append failed:', err));
+    }
   }).catch(err => console.error('[representative] local DB write failed:', err));
 
   // 3. Append phone to all_numbers with property-encoded source (best-effort)
