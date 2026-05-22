@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { createClient } from '@supabase/supabase-js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
@@ -10,6 +11,11 @@ const CLIENT_ID = process.env.CLIENT_ID!;
 const CLIENT_SECRET = process.env.CLIENT_SECRET!;
 const TENANT_ID = process.env.TENANT_ID!;
 const BASE_URL = 'https://public-api.live.buildops.com/v1';
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+);
 
 const PROPERTY_FIELDS = [
   'id', 'companyName', 'accountNumber', 'customerPropertyTypeValue', 'status',
@@ -80,22 +86,22 @@ async function getAllProperties(token: string): Promise<Record<string, unknown>[
   return results;
 }
 
-function loadCustomerMap(outDir: string): Map<string, string> {
-  const csvPath = path.resolve(outDir, 'customers.csv');
-  if (!fs.existsSync(csvPath)) {
-    console.warn('Warning: customers.csv not found in output/ — customerName will be empty. Run getcustomers.ts first.');
-    return new Map();
-  }
-  const lines = fs.readFileSync(csvPath, 'utf-8').trim().split('\n');
-  const headers = lines[0].split(',');
-  const idIdx = headers.indexOf('id');
-  const nameIdx = headers.indexOf('name');
+async function loadCustomerMap(): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',');
-    const id = cols[idIdx]?.trim();
-    const name = cols[nameIdx]?.trim();
-    if (id) map.set(id, name ?? '');
+  let from = 0;
+  const pageSize = 1000;
+  while (true) {
+    const { data, error } = await supabase
+      .from('buildops_customers')
+      .select('buildops_customer_id, name')
+      .eq('tenant_id', TENANT_ID)
+      .range(from, from + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    for (const row of data) {
+      map.set(row.buildops_customer_id as string, row.name as string);
+    }
+    if (data.length < pageSize) break;
+    from += pageSize;
   }
   return map;
 }
@@ -117,7 +123,7 @@ async function main() {
   const outDir = path.resolve(__dirname, '../output');
   fs.mkdirSync(outDir, { recursive: true });
 
-  const customerMap = loadCustomerMap(outDir);
+  const customerMap = await loadCustomerMap();
 
   // properties.csv
   const propRows = properties.map(p => PROPERTY_FIELDS.map(f => escape(p[f])).join(','));
