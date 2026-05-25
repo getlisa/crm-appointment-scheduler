@@ -11,9 +11,10 @@ import type { RepresentativeRow } from '../types.js';
 function mapRow(row: Record<string, unknown>): RepresentativeRow {
   return {
     id: row.id as string,
+    buildopsRepId: row.buildops_rep_id as string | null,
     tenantId: row.tenant_id as string,
     customerId: row.customer_id as string,
-    propertyId: row.property_id as string,
+    propertyId: row.property_id as string | null,
     firstName: row.first_name as string,
     lastName: row.last_name as string,
     cellPhone: row.cell_phone as string | null,
@@ -99,10 +100,34 @@ export async function getRepsByProperty(
   return (data as Record<string, unknown>[]).map(mapRow);
 }
 
+/**
+ * Fetches a single representative by its Supabase primary-key UUID.
+ * Used to resolve the buildopsRepId from a caller_rep_supabase_id dynamic variable.
+ *
+ * @param tenantId   - BuildOps tenant UUID
+ * @param supabaseId - The row's Supabase UUID (buildops_representatives.id)
+ * @returns RepresentativeRow or null if not found
+ */
+export async function getRepById(
+  tenantId: string,
+  supabaseId: string,
+): Promise<RepresentativeRow | null> {
+  const { data, error } = await supabase
+    .from('buildops_representatives')
+    .select('*')
+    .eq('tenant_id', tenantId)
+    .eq('id', supabaseId)
+    .single();
+
+  if (error || !data) return null;
+  return mapRow(data as Record<string, unknown>);
+}
+
 export interface CreateRepInput {
   tenantId: string;
   customerId: string;
   propertyId?: string | null;
+  buildopsRepId?: string | null;
   firstName: string;
   lastName: string;
   cellPhone?: string | null;
@@ -172,6 +197,7 @@ export async function createRepresentative(
       tenant_id: input.tenantId,
       customer_id: input.customerId,
       property_id: input.propertyId ?? null,
+      buildops_rep_id: input.buildopsRepId ?? null,
       first_name: firstName,
       last_name: lastName,
       cell_phone: input.cellPhone ?? null,

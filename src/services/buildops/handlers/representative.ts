@@ -52,6 +52,7 @@ export async function handleSaveCallerNumber(
     savedRep = await createRepresentative({
       tenantId: session.tenantId,
       customerId: customer.buildopsCustomerId,
+      propertyId: null,
       firstName,
       lastName,
       cellPhone: phoneToSave,
@@ -139,11 +140,12 @@ export async function handleAddRepresentative(
     return { result: `error: could not create representative in BuildOps — ${msg}` };
   }
 
-  // 2. Mirror to local Supabase; on success append rep ID to customer.representative_ids (best-effort)
+  // 2. Mirror to local Supabase; on success update customer + property rep ID arrays and the job (best-effort)
   createRepresentative({
     tenantId: session.tenantId,
     customerId: customer.buildopsCustomerId,
     propertyId: propertyId ?? null,
+    buildopsRepId: buildopsRep.id,
     firstName,
     lastName,
     cellPhone: phone ?? null,
@@ -152,6 +154,8 @@ export async function handleAddRepresentative(
     if (supabaseRep) {
       appendToCustomerRepresentativeIds(session.tenantId, customer.id, supabaseRep.id)
         .catch(err => console.error('[representative] customer rep_ids append failed:', err));
+      appendToPropertyRepresentativeIds(propertyId, supabaseRep.id)
+        .catch(err => console.error('[representative] property rep_ids append failed:', err));
       if (session.buildopsJobId) {
         const fullName = `${firstName} ${lastName}`.trim();
         updateJobRepresentative(session.tenantId, session.buildopsJobId, supabaseRep.id, fullName)
@@ -169,10 +173,6 @@ export async function handleAddRepresentative(
       `rep:cellPhone:${firstName} ${lastName}:prop:${propertyId}`,
     ).catch(err => console.error('[representative] all_numbers append failed:', err));
   }
-
-  // 4. Append rep ID to the property's representative_ids (best-effort)
-  appendToPropertyRepresentativeIds(propertyId, buildopsRep.id)
-    .catch(err => console.error('[representative] property rep_ids append failed:', err));
 
   return {
     result: JSON.stringify({
