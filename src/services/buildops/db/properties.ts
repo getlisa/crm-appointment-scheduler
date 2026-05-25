@@ -14,6 +14,7 @@ function mapRow(row: Record<string, unknown>): PropertyRow {
     phonePrimary: row.phone_primary as string | null,
     customerId: row.customer_id as string,
     address: (row.address as AddressObj) ?? {},
+    representativeIds: (row.representative_ids as string[]) ?? [],
   };
 }
 
@@ -51,16 +52,17 @@ export async function getPropertiesByIds(ids: string[]): Promise<PropertyRow[]> 
 }
 
 /**
- * Appends a BuildOps rep UUID to the property's representative_ids array (best-effort).
- * No-ops if the rep ID is already present. Called after add_representative succeeds
- * so future call_inbound lookups can identify the caller's associated property.
+ * Appends a Supabase rep UUID to the property's representative_ids array (best-effort).
+ * No-ops if the rep ID is already present. Called after a local createRepresentative
+ * succeeds so the property's array reflects the new rep immediately without waiting
+ * for the next cron sync.
  *
- * @param propertyId    - BuildOps property UUID (TEXT primary key)
- * @param buildopsRepId - BuildOps representative UUID to append
+ * @param propertyId   - BuildOps property UUID (TEXT primary key)
+ * @param supabaseRepId - Supabase UUID from buildops_representatives.id
  */
 export async function appendToPropertyRepresentativeIds(
   propertyId: string,
-  buildopsRepId: string,
+  supabaseRepId: string,
 ): Promise<void> {
   const { data } = await supabase
     .from('buildops_properties')
@@ -69,12 +71,60 @@ export async function appendToPropertyRepresentativeIds(
     .single();
 
   const current: string[] = (data as { representative_ids: string[] } | null)?.representative_ids ?? [];
-  if (current.includes(buildopsRepId)) return;
+  if (current.includes(supabaseRepId)) return;
 
   await supabase
     .from('buildops_properties')
-    .update({ representative_ids: [...current, buildopsRepId] })
+    .update({ representative_ids: [...current, supabaseRepId] })
     .eq('id', propertyId);
+}
+
+/**
+ * Rebuilds representative_ids for a set of properties from the current DB state.
+ * Writes [] for any property in the list that currently has no reps — this clears
+ * stale arrays when reps are removed during cron sync.
+ *
+ * @param tenantId    - BuildOps tenant UUID
+ * @param propertyIds - BuildOps property UUIDs to update (include both old and new to handle moves)
+ */
+export async function updatePropertyRepresentativeIds(
+  tenantId: string,
+  propertyIds: string[],
+): Promise<void> {
+  if (propertyIds.length === 0) return;
+
+  const allRows: { id: string; property_id: string }[] = [];
+  const SELECT_CHUNK = 50;
+  for (let i = 0; i < propertyIds.length; i += SELECT_CHUNK) {
+    const { data, error } = await supabase
+      .from('buildops_representatives')
+      .select('id, property_id')
+      .eq('tenant_id', tenantId)
+      .in('property_id', propertyIds.slice(i, i + SELECT_CHUNK));
+    if (error) throw new Error(`property rep IDs query: ${error.message}`);
+    allRows.push(...(data ?? []) as { id: string; property_id: string }[]);
+  }
+
+  const byProperty = new Map<string, string[]>();
+  for (const r of allRows) {
+    const list = byProperty.get(r.property_id) ?? [];
+    list.push(r.id);
+    byProperty.set(r.property_id, list);
+  }
+
+  const PARALLEL = 50;
+  for (let i = 0; i < propertyIds.length; i += PARALLEL) {
+    const results = await Promise.all(
+      propertyIds.slice(i, i + PARALLEL).map(propertyId =>
+        supabase
+          .from('buildops_properties')
+          .update({ representative_ids: byProperty.get(propertyId) ?? [] })
+          .eq('id', propertyId),
+      ),
+    );
+    const failed = results.find(r => r.error);
+    if (failed?.error) throw new Error(`update property rep IDs: ${failed.error.message}`);
+  }
 }
 
 /**

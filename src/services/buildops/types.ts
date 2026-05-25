@@ -52,9 +52,11 @@ export interface CustomerRow {
 
 export interface RepresentativeRow {
   id: string;
+  buildopsRepId: string | null;
   tenantId: string;
   customerId: string;
-  propertyId: string;
+  /** BuildOps property UUID. Null for customer-level reps (propertyId=null in BuildOps API). */
+  propertyId: string | null;
   firstName: string;
   lastName: string;
   cellPhone: string | null;
@@ -77,6 +79,8 @@ export interface PropertyRow {
   phonePrimary: string | null;
   customerId: string;
   address: AddressObj;
+  /** Supabase UUIDs from buildops_representatives.id for reps at this property. */
+  representativeIds: string[];
 }
 
 export interface DepartmentRow {
@@ -135,8 +139,6 @@ export interface JobRow {
   createdAt: number | null;
   lastUpdatedAt: number | null;
   issueDescription: string | null;
-  customerProvidedJobNumber: string | null;
-  customerProvidedPoNumber: string | null;
   billingCustomerId: string | null;
   billingCustomerName: string | null;
   invoiceStatus: string | null;
@@ -211,6 +213,7 @@ export interface PendingJobData {
   needsReview?: boolean;
   departmentId?: string | null;
   issueDescription?: string;
+  customerRepId?: string | null;
 }
 
 export interface CreateJobInput {
@@ -222,6 +225,7 @@ export interface CreateJobInput {
   status: JobStatus;
   departmentIds?: string[] | null;
   issueDescription?: string;
+  customerRepId?: string | null;
 }
 
 export interface BuildOpsJobResponse {
@@ -246,8 +250,6 @@ export interface BuildOpsJobResponse {
   isFlagged?: boolean;
   dueDate?: string | null;
   issueDescription?: string | null;
-  customerProvidedJobNumber?: string | null;
-  customerProvidedPONumber?: string | null;
   billingCustomerId?: string | null;
   billingCustomerName?: string | null;
   invoiceStatus?: string | null;

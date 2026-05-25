@@ -33,8 +33,6 @@ function mapRow(row: Record<string, unknown>): JobRow {
     createdAt: row.created_at as number | null,
     lastUpdatedAt: row.last_updated_at as number | null,
     issueDescription: row.issue_description as string | null,
-    customerProvidedJobNumber: row.customer_provided_job_number as string | null,
-    customerProvidedPoNumber: row.customer_provided_po_number as string | null,
     billingCustomerId: row.billing_customer_id as string | null,
     billingCustomerName: row.billing_customer_name as string | null,
     invoiceStatus: row.invoice_status as string | null,
@@ -77,8 +75,6 @@ export async function upsertJob(tenantId: string, jobData: {
   createdAt?: number;
   lastUpdatedAt?: number;
   issueDescription?: string;
-  customerProvidedJobNumber?: string;
-  customerProvidedPoNumber?: string;
   billingCustomerId?: string;
   billingCustomerName?: string;
   invoiceStatus?: string;
@@ -112,8 +108,6 @@ export async function upsertJob(tenantId: string, jobData: {
     created_at: jobData.createdAt ?? null,
     last_updated_at: jobData.lastUpdatedAt ?? null,
     issue_description: jobData.issueDescription ?? null,
-    customer_provided_job_number: jobData.customerProvidedJobNumber ?? null,
-    customer_provided_po_number: jobData.customerProvidedPoNumber ?? null,
     billing_customer_id: jobData.billingCustomerId ?? null,
     billing_customer_name: jobData.billingCustomerName ?? null,
     invoice_status: jobData.invoiceStatus ?? null,

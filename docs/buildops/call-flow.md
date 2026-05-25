@@ -40,15 +40,17 @@ Fires before the call is answered. Handler: `POST /api/buildops/retell/webhook`.
 
 | Outcome | Condition | Variables set |
 |---|---|---|
-| `found` | Exactly 1 match in `all_numbers` | `identified=true`, `customer_id`, `customer_name`, `address`, `address_source`, `new_number_detected`, `property_count`, `property_id` (if 1 property), `caller_source_type`, `caller_rep_name`, `rep_property_id`, `rep_property_address` |
-| `multiple_matches` | 2+ matches in `all_numbers` | `identified=false`, `addresses` = JSON array of `{name, id, address}`, `candidates_count` |
-| `not_found` | 0 matches | `identified=false`, `new_number_detected=true` — agent will call `lookup_customer_fuzzy` |
+| `found` | Exactly 1 match in `all_numbers` | `identified=true`, `customer_id`, `customer_name`, `address`, `address_source`, `new_number_detected`, `property_count`, `property_id` (if 1 property), `caller_source_type`, `caller_rep_name`, `rep_property_id`, `rep_property_address`, `caller_rep_supabase_id`, `caller_rep_buildops_id`, `rep_is_multi_property` |
+| `multiple_matches` | 2+ matches in `all_numbers` | `identified=false`, `addresses` = JSON array of `{name, id, address}`, `candidates_count` — all rep/property vars set to empty defaults |
+| `not_found` | 0 matches | `identified=false`, `new_number_detected=true` — all rep/property vars set to empty defaults; agent calls `lookup_customer_fuzzy` |
 
 When `found` with a single match: `matchedCustomerId` is written to `buildops_inbound_calls` immediately — the agent skips the confirm step.
 
 When `found` and `property_count = 1`: `property_id` is populated so the agent can skip `match_property`.
 
 When `found` and `caller_source_type = "rep"` and `rep_property_id` is non-empty: the caller is a known representative for a specific property — the agent can pre-select that property and skip `match_property` if the caller confirms.
+
+When `found` and `rep_is_multi_property = "true"`: the caller's phone is registered as a representative for 2+ distinct properties. `rep_property_id`, `rep_property_address`, `caller_rep_supabase_id`, and `caller_rep_buildops_id` are all empty — the agent must call `match_property` to resolve which property the caller is calling about.
 
 ---
 
@@ -139,16 +141,18 @@ Each Retell custom function has its own dedicated endpoint under `/api/buildops/
 
 Two flows are permitted. All other paths (e.g. an identified caller calling `lookup_customer_fuzzy` to switch accounts) are blocked by the backend.
 
-**Flow 1 — Unknown caller → fuzzy identify → optionally save as rep**
+**Flow 1 — Unknown caller → fuzzy identify → rep opt-in FIRST → job creation**
 
 ```
 call_inbound (not_found)
   → call_started (session swap UUID → real call_id)
   → lookup_customer_fuzzy (identifies caller against existing account)
+    response: new_number_detected=true (phone not on account)
   → [match_property if property_count > 1]
-  → prepare_job (job creation)
-  → rep opt-in (new_number_detected=true — agent asks, caller must say YES)
-    → add_representative
+  → collect caller name
+  → PRE-JOB rep opt-in (new_number_detected=true from fuzzy response)
+    → add_representative (if caller says YES — returns BuildOps UUID as representative_id)
+  → prepare_job (job creation — passes caller_rep_buildops_id from add_representative response if caller opted in)
   → call_ended
 ```
 
@@ -167,9 +171,21 @@ call_inbound (found, caller_source_type="customer")
 **Flow 3 — Identified property rep → fast path, no opt-in**
 
 ```
-call_inbound (found, caller_source_type="rep", rep_property_id non-empty)
+call_inbound (found, caller_source_type="rep", rep_property_id non-empty, rep_is_multi_property="false")
   → call_started (session swap)
   → [agent offers rep_property_address, caller confirms — skips match_property]
+  → prepare_job (job creation — passes caller_rep_buildops_id; BuildOps job stamped with customerRepId)
+  → [rep opt-in skipped — caller is already a property representative]
+  → call_ended
+```
+
+**Flow 3c — Multi-property rep → property disambiguation → job**
+
+```
+call_inbound (found, caller_source_type="rep", rep_is_multi_property="true")
+  → call_started (session swap)
+  → agent: "You're a representative for multiple locations. Which address are you calling about today?"
+  → match_property (same retry/transfer logic as property_count > 1 flow)
   → prepare_job (job creation)
   → [rep opt-in skipped — caller is already a property representative]
   → call_ended
@@ -213,6 +229,9 @@ call_inbound
 
 [Customer confirmed]
 │
+├── rep_is_multi_property = true ────────────────────────────────── MULTI-PROPERTY REP
+│   └── agent: "You're registered for multiple properties. Which are you calling about?"
+│       └── match_property → (same confirm/retry/transfer as below)
 ├── property_count = 1 ──────────────────────────────────────────── SKIP match_property
 └── property_count > 1
     ├── rep_property_id set ───────────────────────────────────────── PRE-SELECT (agent confirms)
@@ -228,7 +247,11 @@ call_inbound
 
 [Property resolved]
 │
-└── prepare_job
+├── collect caller name (if not a known rep — ask immediately before issue description)
+├── [if new_number_detected=true] PRE-JOB rep registration offer
+│   ├── caller YES → add_representative → note representative_id (BuildOps UUID)
+│   └── caller NO → skip
+└── prepare_job (passes caller_rep_buildops_id — from call-start or from add_representative response)
     │
     ├── account status blocked (creditHold / inactive / suspended / collections)
     │   └── return blocked message to agent → agent informs caller, may transfer
@@ -236,14 +259,13 @@ call_inbound
     ├── priceBookId missing ─────────────────────────────────────── error (re-run sync)
     │
     └── job created in BuildOps + written to buildops_jobs immediately
-        └── rep opt-in check (three cases):
+        └── POST-JOB rep opt-in check (two cases):
             ├── caller_source_type = "rep" AND rep_property_id non-empty → SKIP (already a property rep)
-            ├── caller_source_type = "rep" AND rep_property_id empty → offer opt-in as property rep
+            ├── caller_source_type = "rep" AND rep_property_id empty (contact rep) → offer opt-in as property rep
             │   └── caller says YES → confirm name (caller_rep_name), ask email → add_representative
-            ├── caller_source_type = "customer" → agent informs + asks to save as property rep
-            │   └── caller says YES → collect first_name, last_name, email → add_representative
-            └── new_number_detected = true → agent informs + asks to save as property rep
+            └── caller_source_type = "customer" → agent informs + asks to save as property rep
                 └── caller says YES → collect first_name, last_name, email → add_representative
+            Note: new_number_detected = true callers are handled PRE-JOB (see Flow 1 / PRE-JOB REP REGISTRATION) — not offered here
 ```
 
 ---
@@ -455,6 +477,8 @@ Validates the account, creates the job in BuildOps, and writes it to `buildops_j
 | `needs_review` | boolean | No | Set `true` when `confidence_tier = 2` (flags job for manual review) |
 | `issue_description` | string | No | Caller's description of the issue |
 | `caller_name` | string | No | Name of the person calling — prepended to issue description |
+| `caller_rep_supabase_id` | string | No | Supabase UUID of the caller's representative row — used to stamp `property_rep_id` on the local `buildops_jobs` row |
+| `caller_rep_buildops_id` | string | No | BuildOps UUID of the caller's representative — passed as `customerRepId` to the BuildOps `POST /v1/jobs` API so the job shows the rep's name; set at call-start for known single-property reps, or from the `add_representative` response for newly registered reps |
 
 **Pre-checks (in order):**
 1. `matchedCustomerId` present in session — error if not
@@ -498,7 +522,7 @@ Hardcoded defaults:
 
 **Email notification (fire-and-forget after every exit path):**
 
-`sendJobNotification` in `src/services/buildops/emailNotificationService.js` is called fire-and-forget at all three exit paths. Recipients come from `buildops_tenants.email_to` (array). Sender is `SENDER_MAIL` env var.
+`sendJobNotification` in `src/services/buildops/emailNotificationService.ts` is called fire-and-forget at all three exit paths. Recipients come from `buildops_tenants.email_to` (array). Sender is `SENDER_MAIL` env var.
 
 | Tier | Condition | Badge | Subject |
 |---|---|---|---|
@@ -559,16 +583,17 @@ Phone is always taken from `session.caller` (`from_number`) — the agent never 
 
 Execution order:
 1. Create in BuildOps API at `POST /v1/properties/{propertyId}/representatives` (blocking — must succeed)
-2. Mirror to `buildops_representatives` (best-effort)
-3. Append phone to `buildops_customers.all_numbers` with source `rep:cellPhone:<Name>:prop:<propertyId>` (best-effort, immediate effect for future calls)
-4. Append BuildOps rep ID to `buildops_properties.representative_ids` (best-effort)
+2. Mirror to `buildops_representatives` with `buildops_rep_id` stored (best-effort)
+3. Append Supabase rep UUID to `buildops_customers.representative_ids` and `buildops_properties.representative_ids` (best-effort)
+4. Append phone to `buildops_customers.all_numbers` with source `rep:cellPhone:<Name>:prop:<propertyId>` (best-effort, immediate effect for future calls via cron)
+5. If `session.buildopsJobId` is set (job already created): stamp `property_rep_id`/`property_rep_name` on the local `buildops_jobs` row (best-effort)
 
 **Response variables:**
 
 | Variable | JSON path | Description |
 |---|---|---|
 | `status` | `$.status` | `added` |
-| `representative_id` | `$.representative_id` | BuildOps rep UUID |
+| `representative_id` | `$.representative_id` | BuildOps rep UUID — pass as `caller_rep_buildops_id` to a subsequent `prepare_job` if this is a pre-job rep registration |
 | `name` | `$.name` | Full name string (`first_name last_name`) |
 
 ---

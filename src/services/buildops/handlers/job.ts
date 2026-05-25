@@ -12,6 +12,7 @@ import { getPropertyById } from '../db/properties.js';
 import { setJobCreated } from '../db/inbound-calls.js';
 import { resolveByTenantId } from '../db/tenants.js';
 import { upsertJob, updateJobRepresentative } from '../db/jobs.js';
+import { getRepById } from '../db/representatives.js';
 import { env } from '../../../config/env.js';
 import type {
   BuildOpsContext,
@@ -74,6 +75,7 @@ export async function executeJobCreation(
     status: data.status,
     departmentIds: data.departmentId ? [data.departmentId] : null,
     issueDescription: data.issueDescription,
+    customerRepId: data.customerRepId ?? undefined,
   });
 
   await setJobCreated(session.sessionId, jobResult.jobId);
@@ -176,6 +178,16 @@ export async function handlePrepareJob(
     return { result: 'error: property not found or does not belong to this customer' };
   }
 
+  // Resolve the caller's BuildOps rep UUID to stamp customerRepId on the BuildOps job.
+  // Prefer the value passed directly by the prompt (set at call-start or from add_representative response).
+  // Fallback: look up buildopsRepId from the Supabase row when only the Supabase UUID is known.
+  const callerRepSupabaseId = (args.caller_rep_supabase_id as string | undefined)?.trim() || '';
+  let callerRepBuildopsId = (args.caller_rep_buildops_id as string | undefined)?.trim() || '';
+  if (!callerRepBuildopsId && callerRepSupabaseId) {
+    const rep = await getRepById(session.tenantId, callerRepSupabaseId).catch(() => null);
+    callerRepBuildopsId = rep?.buildopsRepId ?? '';
+  }
+
   const pendingJob: PendingJobData = {
     customerPropertyId,
     jobTypeId: DEFAULT_JOB_TYPE_ID,
@@ -186,6 +198,7 @@ export async function handlePrepareJob(
     needsReview,
     departmentId: DEFAULT_DEPARTMENT_ID,
     issueDescription,
+    customerRepId: callerRepBuildopsId || undefined,
   };
 
   let activeCtx = ctx;
@@ -196,8 +209,6 @@ export async function handlePrepareJob(
     console.log('[buildops] prepare_job result', { status: 'created', jobId: jobResult.jobId, jobNumber: jobResult.jobNumber, sessionId: session.sessionId });
 
     // Best-effort: stamp property_rep fields if caller is a known representative
-    // caller_rep_supabase_id is resolved once at call-start in buildops.ts and passed through Retell
-    const callerRepSupabaseId = (args.caller_rep_supabase_id as string | undefined)?.trim() || '';
     if (callerRepSupabaseId) {
       updateJobRepresentative(session.tenantId, jobResult.jobId, callerRepSupabaseId, callerName).catch(() => undefined);
     }

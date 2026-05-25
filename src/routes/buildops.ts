@@ -150,8 +150,20 @@ function buildInboundResponse(status: 'not_found' | 'error', fromNumber: string,
         from_number: fromNumber,
         new_number_detected: String(newNumberDetected),
         address_count: '0',
+        address: '',
+        address_source: '',
         addresses: '[]',
         multiple_matches: 'false',
+        candidates_count: '0',
+        property_count: '0',
+        property_id: '',
+        caller_source_type: '',
+        caller_rep_name: '',
+        rep_property_id: '',
+        rep_property_address: '',
+        caller_rep_supabase_id: '',
+        caller_rep_buildops_id: '',
+        rep_is_multi_property: 'false',
       },
     },
   };
@@ -260,12 +272,20 @@ router.post('/retell/webhook', async (req, res) => {
           }
         }
 
-        // If caller is a known rep, look up their Supabase UUID once here so prepare_job can stamp it
+        // If caller is a known rep, look up their Supabase + BuildOps UUIDs; detect multi-property reps
         let callerRepSupabaseId = '';
+        let callerRepBuildopsId = '';
+        let repIsMultiProperty = false;
         if (isRep && callerLast10) {
           const reps = await findRepsByPhone(resolution.buildops_tenant_id, callerLast10).catch(() => []);
-          const matchedRep = reps.find(r => r.propertyId === repPropertyId) ?? reps[0] ?? null;
-          callerRepSupabaseId = matchedRep?.id ?? '';
+          const distinctPropertyIds = new Set(reps.map(r => r.propertyId).filter(Boolean));
+          repIsMultiProperty = distinctPropertyIds.size > 1;
+          if (!repIsMultiProperty) {
+            const matchedRep = reps.find(r => r.propertyId === repPropertyId) ?? reps[0] ?? null;
+            callerRepSupabaseId = matchedRep?.id ?? '';
+            callerRepBuildopsId = matchedRep?.buildopsRepId ?? '';
+          }
+          // Multi-property: IDs left empty — resolved after match_property confirms the property
         }
 
         const foundResp = {
@@ -286,9 +306,11 @@ router.post('/retell/webhook', async (req, res) => {
               property_id: properties.length === 1 ? properties[0].id : '',
               caller_source_type: isRep ? 'rep' : 'customer',
               caller_rep_name: callerRepName,
-              rep_property_id: repPropertyId,
-              rep_property_address: repPropertyAddress,
+              rep_property_id: repIsMultiProperty ? '' : repPropertyId,
+              rep_property_address: repIsMultiProperty ? '' : repPropertyAddress,
               caller_rep_supabase_id: callerRepSupabaseId,
+              caller_rep_buildops_id: callerRepBuildopsId,
+              rep_is_multi_property: repIsMultiProperty ? 'true' : 'false',
             },
           },
         };
@@ -309,6 +331,8 @@ router.post('/retell/webhook', async (req, res) => {
             from_number: fromNumber,
             new_number_detected: 'false',
             address_count: '0',
+            address: '',
+            address_source: '',
             addresses: JSON.stringify(
               matches.map(m => ({
                 name: m.name,
@@ -318,6 +342,15 @@ router.post('/retell/webhook', async (req, res) => {
             ),
             multiple_matches: 'true',
             candidates_count: String(matches.length),
+            property_count: '0',
+            property_id: '',
+            caller_source_type: '',
+            caller_rep_name: '',
+            rep_property_id: '',
+            rep_property_address: '',
+            caller_rep_supabase_id: '',
+            caller_rep_buildops_id: '',
+            rep_is_multi_property: 'false',
           },
         },
       };
