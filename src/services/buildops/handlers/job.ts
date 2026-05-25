@@ -6,11 +6,12 @@
  */
 
 import { createJob, getCustomer } from '../client.js';
+import { sendJobNotification } from '../emailNotificationService.js';
 import { getCustomerById } from '../db/customers.js';
 import { getPropertyById } from '../db/properties.js';
 import { setJobCreated } from '../db/inbound-calls.js';
 import { resolveByTenantId } from '../db/tenants.js';
-import { upsertJob } from '../db/jobs.js';
+import { upsertJob, updateJobRepresentative } from '../db/jobs.js';
 import { env } from '../../../config/env.js';
 import type {
   BuildOpsContext,
@@ -151,16 +152,21 @@ export async function handlePrepareJob(
     return { result: 'error: no priceBookId on customer record — re-run getcustomers.ts sync' };
   }
 
+  const freshResolution = await resolveByTenantId(session.tenantId).catch(() => null);
+  const recipientEmails: string[] = freshResolution?.email_to ?? [];
+
   const liveCustomer = await getCustomer(ctx, customer.buildopsCustomerId).catch(() => null);
   const accountStatus = (liveCustomer as Record<string, unknown> | null)?.['status'] as string | null ?? null;
   console.log('[buildops] prepare_job customer check', { customerId: customer.id, buildopsCustomerId: customer.buildopsCustomerId, accountStatus });
   if (accountStatus && BLOCKED_STATUSES.has(accountStatus)) {
     console.log('[buildops] prepare_job blocked', { reason: accountStatus, customerId: customer.id });
+    const blockMessage = BLOCK_REASON[accountStatus] ?? `This account has a status of "${accountStatus}" and cannot have new jobs created.`;
+    sendJobNotification({ outcome: 'tier3', recipientEmails, details: { callerName, callbackNumber, customerName: customer.name, issueDescription: rawIssueDescription, reasonCode: 'blocked', reasonMessage: blockMessage } }).catch(() => undefined);
     return {
       result: JSON.stringify({
         status: 'blocked',
         reason: accountStatus,
-        message: BLOCK_REASON[accountStatus] ?? `This account has a status of "${accountStatus}" and cannot have new jobs created.`,
+        message: blockMessage,
       }),
     };
   }
@@ -182,14 +188,25 @@ export async function handlePrepareJob(
     issueDescription,
   };
 
-  // Resolve a fresh context if the passed ctx may have a stale token
   let activeCtx = ctx;
-  const freshResolution = await resolveByTenantId(session.tenantId).catch(() => null);
   if (freshResolution) activeCtx = buildCtx(freshResolution);
 
   try {
     const jobResult = await executeJobCreation(session, activeCtx, pendingJob);
     console.log('[buildops] prepare_job result', { status: 'created', jobId: jobResult.jobId, jobNumber: jobResult.jobNumber, sessionId: session.sessionId });
+
+    // Best-effort: stamp property_rep fields if caller is a known representative
+    // caller_rep_supabase_id is resolved once at call-start in buildops.ts and passed through Retell
+    const callerRepSupabaseId = (args.caller_rep_supabase_id as string | undefined)?.trim() || '';
+    if (callerRepSupabaseId) {
+      updateJobRepresentative(session.tenantId, jobResult.jobId, callerRepSupabaseId, callerName).catch(() => undefined);
+    }
+
+    const emailOutcome = needsReview ? 'tier2' : 'tier1';
+    const emailDetails = needsReview
+      ? { callerName, callbackNumber, customerName: customer.name, propertyAddress: property.address, issueDescription: rawIssueDescription, jobNumber: jobResult.jobNumber, jobId: jobResult.jobId, reasonCode: 'review_required', reasonMessage: 'Manual review required before dispatch' }
+      : { callerName, callbackNumber, customerName: customer.name, propertyAddress: property.address, issueDescription: rawIssueDescription, jobNumber: jobResult.jobNumber, jobId: jobResult.jobId };
+    sendJobNotification({ outcome: emailOutcome, recipientEmails, details: emailDetails }).catch(() => undefined);
     return {
       result: JSON.stringify({
         status: 'created',
@@ -205,6 +222,7 @@ export async function handlePrepareJob(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[buildops] prepare_job error', { sessionId: session.sessionId, error: msg });
+    sendJobNotification({ outcome: 'tier3', recipientEmails, details: { callerName, callbackNumber, customerName: customer.name, propertyAddress: property.address, issueDescription: rawIssueDescription, reasonCode: 'internal_error', reasonMessage: msg } }).catch(() => undefined);
     return { result: `error: job creation failed — ${msg}` };
   }
 }

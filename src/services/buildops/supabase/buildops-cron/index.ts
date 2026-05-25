@@ -243,10 +243,13 @@ function buildCustomerRow(c: ApiCustomer, reps: ApiRep[], propMap: Map<string, A
   const push = (phone: string | null | undefined, source: string) => { const n = normalize(phone); if (n) entries.push({ phone: n, source }); };
   push(c.phonePrimary, 'customer:phonePrimary');
   push(c.phoneAlternate, 'customer:phoneAlternate');
-  for (const r of reps) {
+  // Property-linked reps come first so their `:prop:` tag wins the phone dedup
+  const sortedReps = [...reps].sort((a, b) => (b.propertyId ? 1 : 0) - (a.propertyId ? 1 : 0));
+  for (const r of sortedReps) {
     const name = [r.firstName, r.lastName].filter(Boolean).join(' ') || 'Unknown';
-    push(r.cellPhone, `rep:cellPhone:${name}`);
-    push(r.landlinePhone, `rep:landlinePhone:${name}`);
+    const propSuffix = r.propertyId ? `:prop:${r.propertyId}` : '';
+    push(r.cellPhone,    `rep:cellPhone:${name}${propSuffix}`);
+    push(r.landlinePhone, `rep:landlinePhone:${name}${propSuffix}`);
   }
   for (const e of propPhoneMap.get(c.id) ?? []) entries.push(e);
   const seen = new Set<string>();

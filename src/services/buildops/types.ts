@@ -6,6 +6,7 @@ export interface ResolutionRow {
   client_secret: string;
   access_token: string;
   buildops_tenant_id: string;
+  email_to: string[];
 }
 
 export interface BuildOpsContext {
@@ -142,6 +143,10 @@ export interface JobRow {
   serviceAgreementId: string | null;
   completedDate: number | null;
   isDeleted: boolean;
+  /** Full name of the property rep who called in and triggered this job. Set at creation or after add_representative opt-in. */
+  propertyRepName: string | null;
+  /** Supabase UUID from buildops_representatives for the property rep. Null if rep was not in the system at job creation time. */
+  propertyRepId: string | null;
 }
 
 // ── Shared value types ────────────────────────────────────────────────────────

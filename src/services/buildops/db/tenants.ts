@@ -17,7 +17,7 @@ import type { ResolutionRow } from '../types.js';
 export async function resolveByInboundNumber(e164: string): Promise<ResolutionRow | null> {
   const { data, error } = await supabase
     .from('buildops_tenants')
-    .select('no, client_id, client_secret, access_token, buildops_tenant_id')
+    .select('no, client_id, client_secret, access_token, buildops_tenant_id, email_to')
     .eq('no', e164)
     .single();
 
@@ -29,6 +29,7 @@ export async function resolveByInboundNumber(e164: string): Promise<ResolutionRo
     client_secret: data.client_secret,
     access_token: data.access_token,
     buildops_tenant_id: data.buildops_tenant_id,
+    email_to: (data.email_to as string[] | null) ?? [],
   };
 }
 
@@ -42,7 +43,7 @@ export async function resolveByInboundNumber(e164: string): Promise<ResolutionRo
 export async function resolveByTenantId(buildopsTenantId: string): Promise<ResolutionRow | null> {
   const { data, error } = await supabase
     .from('buildops_tenants')
-    .select('no, client_id, client_secret, access_token, buildops_tenant_id')
+    .select('no, client_id, client_secret, access_token, buildops_tenant_id, email_to')
     .eq('buildops_tenant_id', buildopsTenantId)
     .single();
 
@@ -54,5 +55,6 @@ export async function resolveByTenantId(buildopsTenantId: string): Promise<Resol
     client_secret: data.client_secret,
     access_token: data.access_token,
     buildops_tenant_id: data.buildops_tenant_id,
+    email_to: (data.email_to as string[] | null) ?? [],
   };
 }

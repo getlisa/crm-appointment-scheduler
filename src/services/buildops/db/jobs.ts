@@ -41,6 +41,8 @@ function mapRow(row: Record<string, unknown>): JobRow {
     serviceAgreementId: row.service_agreement_id as string | null,
     completedDate: row.completed_date as number | null,
     isDeleted: (row.is_deleted as boolean) ?? false,
+    propertyRepName: row.property_rep_name as string | null ?? null,
+    propertyRepId:   row.property_rep_id   as string | null ?? null,
   };
 }
 
@@ -83,6 +85,8 @@ export async function upsertJob(tenantId: string, jobData: {
   serviceAgreementId?: string;
   completedDate?: number;
   isDeleted?: boolean;
+  propertyRepName?: string | null;
+  propertyRepId?: string | null;
 }): Promise<void> {
   await supabase.from('buildops_jobs').upsert({
     tenant_id: tenantId,
@@ -116,7 +120,26 @@ export async function upsertJob(tenantId: string, jobData: {
     service_agreement_id: jobData.serviceAgreementId ?? null,
     completed_date: jobData.completedDate ?? null,
     is_deleted: jobData.isDeleted ?? false,
+    property_rep_name: jobData.propertyRepName ?? null,
+    property_rep_id:   jobData.propertyRepId   ?? null,
   }, { onConflict: 'tenant_id,job_id' });
+}
+
+/**
+ * Patches only the property_rep_name and property_rep_id fields on an existing job row.
+ * Called after a representative is identified (at creation time or after opt-in).
+ * Does not overwrite any other fields.
+ */
+export async function updateJobRepresentative(
+  tenantId: string,
+  jobId: string,
+  repId: string,
+  repName: string,
+): Promise<void> {
+  await supabase.from('buildops_jobs')
+    .update({ property_rep_id: repId, property_rep_name: repName })
+    .eq('tenant_id', tenantId)
+    .eq('job_id', jobId);
 }
 
 /**

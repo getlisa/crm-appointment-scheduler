@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createClient } from '@supabase/supabase-js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
@@ -9,6 +10,11 @@ const CLIENT_ID     = process.env.CLIENT_ID!;
 const CLIENT_SECRET = process.env.CLIENT_SECRET!;
 const TENANT_ID     = process.env.TENANT_ID!;
 const BASE_URL      = 'https://public-api.live.buildops.com/v1';
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+);
 
 const DEFAULT_JOB_ID = '2df753ce-9bf2-4d86-aed1-fc09aa1126b9';
 const JOB_ID = process.argv[2] ?? DEFAULT_JOB_ID;
@@ -59,6 +65,22 @@ async function main() {
     console.log(desc);
   } else {
     console.log('(null — no issue description on job)');
+  }
+
+  // ── Local DB: property rep fields ──────────────────────────────────────────
+  const { data: localJob } = await supabase
+    .from('buildops_jobs')
+    .select('property_rep_name, property_rep_id')
+    .eq('tenant_id', TENANT_ID)
+    .eq('job_id', JOB_ID)
+    .single();
+
+  console.log('\n=== Property Rep (local DB) ===');
+  if (localJob) {
+    console.log(`Rep Name : ${localJob['property_rep_name'] ?? '(not set)'}`);
+    console.log(`Rep ID   : ${localJob['property_rep_id'] ?? '(not set)'}`);
+  } else {
+    console.log('(job not found in local buildops_jobs — run cron sync or check TENANT_ID)');
   }
 
   console.log('\n=== Raw Job Data ===');

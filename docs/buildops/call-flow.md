@@ -164,15 +164,28 @@ call_inbound (found, caller_source_type="customer")
   → call_ended
 ```
 
-**Flow 3 — Identified rep with known property → fast path, no opt-in**
+**Flow 3 — Identified property rep → fast path, no opt-in**
 
 ```
-call_inbound (found, caller_source_type="rep", rep_property_id set)
+call_inbound (found, caller_source_type="rep", rep_property_id non-empty)
   → call_started (session swap)
   → [agent offers rep_property_address, caller confirms — skips match_property]
   → prepare_job (job creation)
-  → [rep opt-in skipped — caller is already a saved representative]
+  → [rep opt-in skipped — caller is already a property representative]
   → call_ended
+```
+
+**Flow 3b — Identified contact rep (no property link) → opt-in offered**
+
+```
+call_inbound (found, caller_source_type="rep", rep_property_id empty)
+  → call_started (session swap)
+  → [greeted as "contact representative for {customer_name}"]
+  → [property resolved via match_property or property_id]
+  → prepare_job (job creation)
+  → rep opt-in offered: "Would you like to be added as a property representative for [address]?"
+    → YES → confirm name (using caller_rep_name), ask email → add_representative
+    → NO  → call_ended
 ```
 
 > **Backend guard**: `handleLookupFuzzy` returns an error immediately if `session.matchedCustomerId` is already set — prevents an identified caller from cross-booking to a different account mid-call.
@@ -223,12 +236,14 @@ call_inbound
     ├── priceBookId missing ─────────────────────────────────────── error (re-run sync)
     │
     └── job created in BuildOps + written to buildops_jobs immediately
-        └── rep opt-in check:
-            ├── caller_source_type = "rep" → skip (already a representative)
-            ├── caller_source_type = "customer" → agent informs + asks to save as rep
-            └── new_number_detected = true → agent informs + asks to save as rep
-                └── caller says YES → collect first_name, last_name, email (optional)
-                                   → confirm details → add_representative
+        └── rep opt-in check (three cases):
+            ├── caller_source_type = "rep" AND rep_property_id non-empty → SKIP (already a property rep)
+            ├── caller_source_type = "rep" AND rep_property_id empty → offer opt-in as property rep
+            │   └── caller says YES → confirm name (caller_rep_name), ask email → add_representative
+            ├── caller_source_type = "customer" → agent informs + asks to save as property rep
+            │   └── caller says YES → collect first_name, last_name, email → add_representative
+            └── new_number_detected = true → agent informs + asks to save as property rep
+                └── caller says YES → collect first_name, last_name, email → add_representative
 ```
 
 ---
@@ -400,7 +415,7 @@ Validates the account, creates the job in BuildOps, and writes it to `buildops_j
 
 | Retell setting | Value |
 |---|---|
-| Timeout | 5000 ms |
+| Timeout | 8000 ms |
 | speak_during_execution | `false` |
 | args_only | `false` — **required** so Retell includes `body.call.call_id` for session resolution |
 
@@ -480,6 +495,24 @@ Validates the account, creates the job in BuildOps, and writes it to `buildops_j
 Hardcoded defaults:
 - `jobTypeId`: `04df1a40-16b1-43f4-aa9b-8eafcec812ad` (Time & Material)
 - `departmentId`: `d87c1a38-4acd-459f-9b3f-446a810fae10` (D2 Service Calls T&M)
+
+**Email notification (fire-and-forget after every exit path):**
+
+`sendJobNotification` in `src/services/buildops/emailNotificationService.js` is called fire-and-forget at all three exit paths. Recipients come from `buildops_tenants.email_to` (array). Sender is `SENDER_MAIL` env var.
+
+| Tier | Condition | Badge | Subject |
+|---|---|---|---|
+| `tier1` | Job created, no review | Tier 1 — Service Request Logged (green) | `New Service Request — {customer} \| Job #{jobNumber}` |
+| `tier2` | Job created, review required (`needs_review=true`) | Tier 2 — Review Required (orange) | `Service Request Needs Review — {customer} \| Job #{jobNumber}` |
+| `tier3` | Job not created (blocked or error) | Tier 3 — Job Not Created (red) | `Service Request Failed — {customer}` |
+
+Tier 1 and Tier 2 emails include a **View in BuildOps** button: `https://live.buildops.com/job/view/{jobNumber}`.
+
+Email rows per tier:
+```
+Tier 1/2: Caller Name · Callback Number · Customer · Service Address · Issue · Job Number · Tier · [Review Reason — tier2 only] · Logged At
+Tier 3:   Caller Name · Callback Number · Customer · Service Address · Issue · Tier · Reason · Logged At
+```
 
 ---
 
