@@ -13,31 +13,41 @@
  *  tier3 — job not created (blocked or error)  (red)
  */
 
-const SENDGRID_API    = 'https://api.sendgrid.com/v3/mail/send';
+import type { AddressObj } from './types.js';
+
+const SENDGRID_API     = 'https://api.sendgrid.com/v3/mail/send';
 const BUILDOPS_JOB_URL = 'https://live.buildops.com/job/view/';
 
-function isConfigured() {
+export type NotificationOutcome = 'tier1' | 'tier2' | 'tier3';
+
+export interface NotificationDetails {
+  callerName: string;
+  callbackNumber: string;
+  customerName: string;
+  propertyAddress?: AddressObj;
+  issueDescription?: string;
+  jobNumber?: string;
+  jobId?: string;
+  reasonCode?: string;
+  reasonMessage?: string;
+}
+
+function isConfigured(): boolean {
   return !!process.env.SENDGRID_API_KEY;
 }
 
 /**
  * Sends a tier-based job notification email.
- *
- * @param {Object} opts
- * @param {'tier1'|'tier2'|'tier3'} opts.outcome
- * @param {string[]} opts.recipientEmails  - from buildops_tenants.email_to
- * @param {Object}  opts.details
- * @param {string}  opts.details.callerName
- * @param {string}  opts.details.callbackNumber
- * @param {string}  opts.details.customerName
- * @param {{line1?:string,city?:string,state?:string,zip?:string}} opts.details.propertyAddress
- * @param {string}  opts.details.issueDescription
- * @param {string}  [opts.details.jobNumber]       - tier1/tier2 only
- * @param {string}  [opts.details.jobId]           - tier1/tier2 only
- * @param {string}  [opts.details.reasonCode]      - tier2/tier3 only
- * @param {string}  [opts.details.reasonMessage]   - tier2/tier3 only
  */
-export async function sendJobNotification({ outcome, recipientEmails, details }) {
+export async function sendJobNotification({
+  outcome,
+  recipientEmails,
+  details,
+}: {
+  outcome: NotificationOutcome;
+  recipientEmails: string[];
+  details: NotificationDetails;
+}): Promise<{ sent: boolean; to?: string[]; subject?: string; reason?: string; error?: string }> {
   if (!isConfigured()) {
     return { sent: false, reason: 'sendgrid_not_configured' };
   }
@@ -54,7 +64,6 @@ export async function sendJobNotification({ outcome, recipientEmails, details })
 
   const isTier1 = outcome === 'tier1';
   const isTier2 = outcome === 'tier2';
-  const hasJob  = isTier1 || isTier2;
 
   const subject = isTier1
     ? `New Service Request — ${details.customerName} | Job #${details.jobNumber}`
@@ -104,30 +113,37 @@ export async function sendJobNotification({ outcome, recipientEmails, details })
     console.log('[email] notification sent', { outcome, to, subject });
     return { sent: true, to, subject };
   } catch (err) {
-    console.error('[email] failed to send notification', err?.message ?? err);
-    return { sent: false, error: err?.message ?? 'unknown' };
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[email] failed to send notification', msg);
+    return { sent: false, error: msg };
   }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function formatAddress(addr) {
+function formatAddress(addr?: AddressObj): string {
   if (!addr) return 'Not provided';
   const { line1, city, state, zip } = addr;
   return [line1, city, state, zip].filter(Boolean).join(', ') || 'Not provided';
 }
 
-function formatTimestamp() {
+function formatTimestamp(): string {
   return new Date().toLocaleString('en-US', {
     timeZone: 'America/New_York',
     dateStyle: 'medium',
     timeStyle: 'short',
-  });
+  } as Intl.DateTimeFormatOptions);
 }
 
 // ── HTML composers ────────────────────────────────────────────────────────────
 
-function baseHtml(badge, badgeColor, rows, footerNote, ctaUrl) {
+function baseHtml(
+  badge: string,
+  badgeColor: string,
+  rows: [string, string][],
+  footerNote: string,
+  ctaUrl: string | null,
+): string {
   const rowsHtml = rows.map(([label, value]) => `
     <tr>
       <td style="padding:6px 12px;color:#555;font-size:13px;width:160px;vertical-align:top">${label}</td>
@@ -161,7 +177,7 @@ function baseHtml(badge, badgeColor, rows, footerNote, ctaUrl) {
 </html>`;
 }
 
-function composeTier1Html(d) {
+function composeTier1Html(d: NotificationDetails): string {
   const jobUrl = d.jobNumber ? `${BUILDOPS_JOB_URL}${d.jobNumber}` : null;
   return baseHtml(
     'Tier 1 — Service Request Logged', '#2e7d32',
@@ -180,7 +196,7 @@ function composeTier1Html(d) {
   );
 }
 
-function composeTier2Html(d) {
+function composeTier2Html(d: NotificationDetails): string {
   const jobUrl = d.jobNumber ? `${BUILDOPS_JOB_URL}${d.jobNumber}` : null;
   const reviewReason = d.reasonMessage || 'Manual review required before dispatch';
   return baseHtml(
@@ -201,7 +217,7 @@ function composeTier2Html(d) {
   );
 }
 
-function composeTier3Html(d) {
+function composeTier3Html(d: NotificationDetails): string {
   const reason = d.reasonMessage || d.reasonCode || 'See internal logs';
   return baseHtml(
     'Tier 3 — Job Not Created', '#c62828',
@@ -222,7 +238,7 @@ function composeTier3Html(d) {
 
 // ── Plain-text composers ──────────────────────────────────────────────────────
 
-function composeTier1Text(d) {
+function composeTier1Text(d: NotificationDetails): string {
   const jobUrl = d.jobNumber ? `${BUILDOPS_JOB_URL}${d.jobNumber}` : null;
   return [
     'Crockett Facilities — Clara AI | TIER 1 — SERVICE REQUEST LOGGED',
@@ -241,7 +257,7 @@ function composeTier1Text(d) {
   ].join('\n');
 }
 
-function composeTier2Text(d) {
+function composeTier2Text(d: NotificationDetails): string {
   const jobUrl = d.jobNumber ? `${BUILDOPS_JOB_URL}${d.jobNumber}` : null;
   const reviewReason = d.reasonMessage || 'Manual review required before dispatch';
   return [
@@ -262,7 +278,7 @@ function composeTier2Text(d) {
   ].join('\n');
 }
 
-function composeTier3Text(d) {
+function composeTier3Text(d: NotificationDetails): string {
   const reason = d.reasonMessage || d.reasonCode || 'See internal logs';
   return [
     'Crockett Facilities — Clara AI | TIER 3 — JOB NOT CREATED',
