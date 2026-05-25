@@ -1,7 +1,7 @@
 # BuildOps Integration — Full Session Log
 
 **Branch**: `buildops_integration` | **Latest commit**: `502b740`
-**Working tree**: uncommitted changes from sessions 2026-05-20s2 and 2026-05-21.
+**Working tree**: uncommitted changes from sessions 2026-05-20s2 through 2026-05-23.
 
 ---
 
@@ -17,6 +17,26 @@ Clara Customer:   id=dc45fcd3-e445-4c72-837e-005f89502161  buildops_id=3e34ee30-
 
 ## Pending (current — in order)
 
+### G. Populate `buildops_tenants.email_to` in Supabase
+
+After running migration A3 below, update the `email_to` column for each tenant with the recipient email addresses:
+```sql
+UPDATE buildops_tenants
+SET email_to = '{"ops@crockett.com", "meg@crockett.com"}'
+WHERE buildops_tenant_id = '470f824e-94a8-41c1-9ef6-c87bbe099dd2';
+```
+Emails won't send until this is populated.
+
+### H. Vercel env vars
+
+Add/confirm in Vercel dashboard:
+- `SENDGRID_API_KEY` — SendGrid API key
+- `SENDER_MAIL` — verified sender address (e.g. `noreply@justclara.ai`)
+
+### I. Trigger cron sync after deploy
+
+After deploying, trigger `buildops-cron` (or wait for next scheduled run). This rebuilds `all_numbers_sources` with `:prop:propertyId` for property-linked reps — without it, existing property reps will be identified as contact reps on incoming calls.
+
 ### A. Supabase migrations — run BEFORE deploy
 
 ```sql
@@ -28,6 +48,11 @@ ALTER TABLE buildops_properties
   ADD COLUMN IF NOT EXISTS representative_ids text[] NOT NULL DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_buildops_properties_rep_ids
   ON buildops_properties USING GIN (representative_ids);
+
+-- A3. From 2026-05-23 session (email notification):
+-- File: migrations/buildops/20260522_003_tenant_email_to.sql
+ALTER TABLE buildops_tenants
+  ADD COLUMN IF NOT EXISTS email_to text[] NOT NULL DEFAULT '{}';
 ```
 
 Note: `buildops_inbound_calls` migration from 2026-05-19 (`session_id`/`retell_call_id` split) was included in earlier commit `1de40e7`.
@@ -95,9 +120,10 @@ incrementalSync()
 
 ### Source String Format
 ```
-rep:cellPhone:John Smith:prop:6a62f305-8a22-4ef5-be19-bd8f8d8282f3
+rep:cellPhone:John Smith:prop:6a62f305-8a22-4ef5-be19-bd8f8d8282f3   ← property rep (preferred)
+rep:cellPhone:John Smith                                               ← contact rep (no property link)
 ```
-Parsed in `call_inbound` to extract rep name and property UUID. Old format `rep:cellPhone:John Smith` (pre-2026-05-20 reps) → identified as `caller_source_type: "rep"` but `rep_property_id` will be empty, falling back to normal property selection.
+Parsed in `call_inbound` to extract rep name and property UUID. The cron sync (2026-05-23 fix) now encodes `:prop:propertyId` for any rep where `ApiRep.propertyId` is set, sorting property-linked reps first so their phone wins the dedup. Old records without `:prop:` are identified as `caller_source_type: "rep"` but `rep_property_id` will be empty → greeted as "contact representative", opt-in offered post-job.
 
 ---
 
@@ -193,6 +219,66 @@ Parsed in `call_inbound` to extract rep name and property UUID. Old format `rep:
 - **Rep greeting updated to "property representative"**: Prompt now greets rep callers as "property representative for [address]" (falls back to "representative for [customer_name]" when `rep_property_address` is empty). `handleAddRepresentative` now chains `appendToCustomerRepresentativeIds` after `createRepresentative` returns, so `buildops_customers.representative_ids` is updated immediately on mid-call rep creation (previously only populated by cron). New DB helper: `appendToCustomerRepresentativeIds(tenantId, customerId, repId)`.
   **Files:** `src/services/buildops/db/customers.ts`, `src/services/buildops/handlers/representative.ts`, `retell/retell_single_prompt.txt`
 
+### Session 2026-05-23 (session 1 — prepare_job timing + email + rep identification)
+
+- **`prepare_job` timing — confirmation gate + individual name rule**:
+  - Prompt: added explicit CONFIRMATION GATE (mandatory) — agent must read back name, callback number, and issue and receive "yes" before calling `prepare_job`. If caller corrects a field, only that field is re-confirmed; `prepare_job` is not called until a clean "yes" is received.
+  - Prompt: added INDIVIDUAL NAME RULE — agent must collect caller's personal name before `prepare_job`; never uses `{{customer_name}}`; uses `{{caller_rep_name}}` if `caller_source_type` is "rep".
+  - Prompt: Call Type A — moved `prepare_job` to after billing authorization ("Do you authorize the call-out?"); added explicit "IF CALLER DECLINES → do NOT call `prepare_job`" branch.
+  - Prompt: Call Type B — added confirmation gate as step 3; `prepare_job` moved to step 4 (after confirmation).
+  **File:** `retell/retell_single_prompt.txt`
+
+- **Email notification service created** (`src/services/buildops/emailNotificationService.js`):
+  - `sendJobNotification({ outcome, recipientEmails, details })` — fire-and-forget, never throws.
+  - Gates: `SENDGRID_API_KEY` must be set + `recipientEmails` must be non-empty (silently skips otherwise).
+  - Recipients from `buildops_tenants.email_to` (text array — see migration A3).
+  - Two outcomes at creation: `'job_created'` and `'job_not_created'` (later updated to tiers — see session 2).
+  - HTML: dual-card design (Caller Details + Action Taken), green/red badge, plain-text fallback.
+  **Files:** `src/services/buildops/emailNotificationService.js` (created), `src/services/buildops/db/tenants.ts` (both SELECT queries + return objects include `email_to`), `src/services/buildops/types.ts` (`email_to: string[]` added to `ResolutionRow`), `.env.example` (`SENDGRID_API_KEY`, `SENDER_MAIL` added)
+
+- **`job.ts` — email integration**:
+  - Import `sendJobNotification` from `../emailNotificationService.js`.
+  - `freshResolution` (tenant DB row) moved before the blocked-account check so `email_to` is available at all 3 exit paths.
+  - Fire-and-forget at: job created (outcome `'job_created'`), account blocked (outcome `'job_not_created'`, `reasonCode: 'blocked'`), internal error (outcome `'job_not_created'`, `reasonCode: 'internal_error'`).
+  **File:** `src/services/buildops/handlers/job.ts`
+
+- **SQL migration** `migrations/buildops/20260522_003_tenant_email_to.sql` created.
+
+### Session 2026-05-23 (session 2 — email tiers + property rep sync fix)
+
+- **Email notification — tier-based outcomes**:
+  - Outcomes changed: `'job_created'` / `'job_not_created'` → `'tier1'` / `'tier2'` / `'tier3'`.
+    - `tier1`: job created, `needs_review=false` → green badge "Tier 1 — Service Request Logged"
+    - `tier2`: job created, `needs_review=true` → orange badge "Tier 2 — Review Required"; adds `reviewReason` row
+    - `tier3`: job not created (blocked or error) → red badge "Tier 3 — Job Not Created"; adds `Reason` row
+  - Added `BUILDOPS_JOB_URL = 'https://live.buildops.com/job/view/'` constant. Tier 1 and 2 emails include a **View in BuildOps** button: `https://live.buildops.com/job/view/{jobNumber}` (job_number is the human-readable number e.g. `5270`, not the UUID).
+  - Full email field structure per tier:
+    ```
+    Tier 1/2: Caller Name · Callback Number · Customer · Service Address · Issue · Job Number · Tier · [Review Reason — tier2 only] · Logged At · [View button]
+    Tier 3:   Caller Name · Callback Number · Customer · Service Address · Issue · Tier · Reason · Logged At
+    ```
+  **File:** `src/services/buildops/emailNotificationService.js`
+
+- **`job.ts` — tier split at success path**:
+  - `needsReview=false` → `sendJobNotification({ outcome: 'tier1', ... })`.
+  - `needsReview=true` → `sendJobNotification({ outcome: 'tier2', ..., reasonCode: 'review_required', reasonMessage: 'Manual review required before dispatch' })`.
+  - Blocked + error paths now use `'tier3'` (was `'job_not_created'`).
+  **File:** `src/services/buildops/handlers/job.ts`
+
+- **Cron sync — property rep source tag fix** (critical):
+  - **Bug**: `buildCustomerRow()` built source tag `rep:cellPhone:John Smith` for ALL reps, ignoring `r.propertyId`. Property-linked reps were never identified as property reps on incoming calls.
+  - **Fix**: sort reps so those with `r.propertyId` come first (so their phone wins dedup), then append `:prop:${r.propertyId}` to the source tag.
+  - After next cron run, `all_numbers_sources` will correctly encode property-linked reps; route parsing in `buildops.ts` will extract `repPropertyId` and fetch `repPropertyAddress` automatically.
+  **File:** `src/services/buildops/supabase/buildops-cron/index.ts`
+
+- **Prompt — contact rep greeting + expanded opt-in**:
+  - Greeting for contact reps (no property link) now says "contact representative for {{customer_name}}" instead of "representative for".
+  - Added IDENTITY PRIORITY rule: property rep identity always takes precedence; caller with `rep_property_id` non-empty is always "property representative".
+  - Opt-in expanded from 2 cases to 3: now also triggers for `caller_source_type="rep"` + `rep_property_id` empty (contact rep not yet linked to a property). In that case: confirms name using `{{caller_rep_name}}`, then proceeds to `add_representative`. Previously all reps were skipped.
+  **File:** `retell/retell_single_prompt.txt`
+
+- **Docs updated**: `docs/buildops/call-flow.md` — added Flow 3b (contact rep opt-in path), updated rep opt-in check diagram to 3 cases, added email notification tier table with job link info under `prepare_job`.
+
 ### Session 2026-05-21
 
 - **`match_property` — recall-based scoring** (`src/services/buildops/handlers/customer.ts`):
@@ -236,9 +322,16 @@ Parsed in `call_inbound` to extract rep name and property UUID. Old format `rep:
 | `src/services/buildops/handlers/fuzzy-lookup.ts` | 2026-05-18 — cross-account guard |
 | `src/services/buildops/fuzzy-search.ts` | 2026-05-21 — `WRITTEN_NUMBERS` (0-9) in `normalizeAddress` |
 | `src/services/buildops/types.ts` | 2026-05-20s2 — `allNumbersSources: string[]` in `CustomerRow` |
-| `src/services/buildops/supabase/buildops-cron/index.ts` | 2026-05-19 — rep detection overhaul + deleted resource handling |
-| `retell/retell_single_prompt.txt` | 2026-05-22 — rep greeting updated to "property representative for [address]" |
-| `docs/buildops/call-flow.md` | 2026-05-20s2 — args_only, variables table, flow diagram, Flow 3 |
+| `src/services/buildops/supabase/buildops-cron/index.ts` | 2026-05-23s2 — property rep source tag fix (`:prop:` suffix, sort property-linked reps first) |
+| `src/services/buildops/emailNotificationService.js` | 2026-05-23s2 — **created**; tier1/tier2/tier3, job link button, full field structure |
+| `src/services/buildops/handlers/job.ts` | 2026-05-23s2 — tier1/tier2 split; freshResolution moved before blocked check; tier3 replaces job_not_created |
+| `src/services/buildops/db/tenants.ts` | 2026-05-23s1 — `email_to` added to both SELECT queries + return objects |
+| `src/services/buildops/types.ts` | 2026-05-23s1 — `email_to: string[]` added to `ResolutionRow` |
+| `retell/retell_single_prompt.txt` | 2026-05-23s2 — contact rep greeting; identity priority rule; opt-in expanded to 3 cases |
+| `docs/buildops/call-flow.md` | 2026-05-23s2 — Flow 3b, 3-case opt-in diagram, email tier table |
+| `migrations/buildops/20260522_003_tenant_email_to.sql` | 2026-05-23s1 — **created**; `email_to text[]` on `buildops_tenants` |
+| `.env.example` | 2026-05-23s1 — `SENDGRID_API_KEY`, `SENDER_MAIL` added |
+| `docs/handoff_docs/buildops-handoff.md` | 2026-05-23s2 — sessions 2026-05-23s1+s2 added |
 | `docs/buildops/endpoint_responses.md` | 2026-05-20s2 — not_found flag, found vars, prepare_job curl, add_rep trigger |
 | `migrations/buildops/20260520_002_property_rep_ids.sql` | 2026-05-20s2 — new migration |
 | `tests/buildops/test_job_creation.ts` | 2026-05-18 — 3-scenario lifecycle test |

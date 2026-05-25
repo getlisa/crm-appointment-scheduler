@@ -13,6 +13,7 @@ import {
 } from '../services/buildops/db/inbound-calls.js';
 import { findCustomersByPhone } from '../services/buildops/db/customers.js';
 import { getPropertiesByIds, getPropertyById } from '../services/buildops/db/properties.js';
+import { findRepsByPhone } from '../services/buildops/db/representatives.js';
 import { normalizePhoneLast10, pickPrimaryAddress } from '../services/buildops/fuzzy-search.js';
 import { handleLookupFuzzy } from '../services/buildops/handlers/fuzzy-lookup.js';
 import {
@@ -259,6 +260,14 @@ router.post('/retell/webhook', async (req, res) => {
           }
         }
 
+        // If caller is a known rep, look up their Supabase UUID once here so prepare_job can stamp it
+        let callerRepSupabaseId = '';
+        if (isRep && callerLast10) {
+          const reps = await findRepsByPhone(resolution.buildops_tenant_id, callerLast10).catch(() => []);
+          const matchedRep = reps.find(r => r.propertyId === repPropertyId) ?? reps[0] ?? null;
+          callerRepSupabaseId = matchedRep?.id ?? '';
+        }
+
         const foundResp = {
           call_inbound: {
             override_agent_id: env.retellLlmId ?? undefined,
@@ -279,6 +288,7 @@ router.post('/retell/webhook', async (req, res) => {
               caller_rep_name: callerRepName,
               rep_property_id: repPropertyId,
               rep_property_address: repPropertyAddress,
+              caller_rep_supabase_id: callerRepSupabaseId,
             },
           },
         };

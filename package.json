@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@sendgrid/mail": "^8.1.6",
     "@supabase/supabase-js": "^2.57.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",

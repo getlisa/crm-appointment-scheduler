@@ -8,6 +8,7 @@
 import { getCustomerById, appendToCustomerAllNumbers, appendToCustomerRepresentativeIds } from '../db/customers.js';
 import { createRepresentative } from '../db/representatives.js';
 import { appendToPropertyRepresentativeIds } from '../db/properties.js';
+import { updateJobRepresentative } from '../db/jobs.js';
 import { createCustomerRepresentative, createPropertyRepresentative } from '../client.js';
 import type { InboundCallRow, BuildOpsContext, RetellFunctionResult } from '../types.js';
 
@@ -151,6 +152,11 @@ export async function handleAddRepresentative(
     if (supabaseRep) {
       appendToCustomerRepresentativeIds(session.tenantId, customer.id, supabaseRep.id)
         .catch(err => console.error('[representative] customer rep_ids append failed:', err));
+      if (session.buildopsJobId) {
+        const fullName = `${firstName} ${lastName}`.trim();
+        updateJobRepresentative(session.tenantId, session.buildopsJobId, supabaseRep.id, fullName)
+          .catch(err => console.error('[representative] job rep update failed:', err));
+      }
     }
   }).catch(err => console.error('[representative] local DB write failed:', err));
 
