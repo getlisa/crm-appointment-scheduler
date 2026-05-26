@@ -26,6 +26,7 @@ function mapRow(row: Record<string, unknown>): RepresentativeRow {
     isDoNotCall: row.is_do_not_call as boolean,
     isEmailOptOut: row.is_email_opt_out as boolean,
     isSmsOptOut: row.is_sms_opt_out as boolean,
+    repSource: (row.rep_source as 'our_rep' | 'property_rep') ?? 'our_rep',
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     version: row.version as number,
@@ -133,6 +134,7 @@ export interface CreateRepInput {
   cellPhone?: string | null;
   landlinePhone?: string | null;
   email?: string | null;
+  repSource?: 'our_rep' | 'property_rep';
 }
 
 async function resolveUniqueName(
@@ -205,6 +207,7 @@ export async function createRepresentative(
       normalized_cell_phone: input.cellPhone ? normalize(input.cellPhone) : null,
       normalized_landline_phone: input.landlinePhone ? normalize(input.landlinePhone) : null,
       email: input.email ?? null,
+      rep_source: input.repSource ?? 'our_rep',
     })
     .select()
     .single();

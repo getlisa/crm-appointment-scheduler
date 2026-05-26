@@ -252,17 +252,55 @@ router.post('/retell/webhook', async (req, res) => {
         const properties = await getPropertiesByIds(customer.propertyIds);
         const primary = pickPrimaryAddress(customer, properties);
 
-        // Determine caller's source (rep vs customer's own number) from all_numbers_sources
         const callerLast10 = normalizePhoneLast10(fromNumber) ?? '';
-        const sourceIdx = customer.allNumbers.indexOf(callerLast10);
-        const rawSource = sourceIdx >= 0 ? (customer.allNumbersSources[sourceIdx] ?? '') : '';
-        const isRep = rawSource.startsWith('rep:');
-        const repNameMatch = rawSource.match(/^rep:[^:]+:([^:]+?)(?::prop:|$)/);
-        const callerRepName = repNameMatch?.[1] ?? '';
-        const repPropMatch = rawSource.match(/:prop:(.+)$/);
-        const repPropertyId = repPropMatch?.[1] ?? '';
 
-        // If rep is associated with a specific property, fetch its formatted address
+        let isRep = false;
+        let callerRepName = '';
+        let repPropertyId = '';
+        let callerRepSupabaseId = '';
+        let callerRepBuildopsId = '';
+        let repIsMultiProperty = false;
+
+        // Tier 2: phone-indexed DB query → filter to this customer's property-linked reps.
+        // Authoritative: bypasses stale all_numbers_sources when phone is shared with customer primary.
+        if (callerLast10) {
+          const allReps = await findRepsByPhone(resolution.buildops_tenant_id, callerLast10).catch(() => []);
+          const propertyReps = allReps.filter(
+            r => r.customerId === customer.buildopsCustomerId &&
+                 r.propertyId !== null &&
+                 customer.propertyIds.includes(r.propertyId!),
+          );
+
+          if (propertyReps.length > 0) {
+            isRep = true;
+            const distinctPropertyIds = new Set(propertyReps.map(r => r.propertyId!));
+            repIsMultiProperty = distinctPropertyIds.size > 1;
+
+            if (!repIsMultiProperty) {
+              const matchedRep = propertyReps[0];
+              callerRepName = `${matchedRep.firstName} ${matchedRep.lastName}`.trim();
+              repPropertyId = matchedRep.propertyId!;
+              callerRepSupabaseId = matchedRep.id;
+              callerRepBuildopsId = matchedRep.buildopsRepId ?? '';
+            }
+            // Multi-property: IDs left empty — resolved after match_property confirms the property
+          }
+        }
+
+        // Fallback: all_numbers_sources — covers reps registered this call before cron syncs
+        if (!isRep && callerLast10) {
+          const sourceIdx = customer.allNumbers.indexOf(callerLast10);
+          const rawSource = sourceIdx >= 0 ? (customer.allNumbersSources[sourceIdx] ?? '') : '';
+          if (rawSource.startsWith('our_rep:') || rawSource.startsWith('property_rep:')) {
+            isRep = true;
+            const repNameMatch = rawSource.match(/^(?:our_rep|property_rep):[^:]+:([^:]+?)(?::prop:|$)/);
+            callerRepName = repNameMatch?.[1] ?? '';
+            const repPropMatch = rawSource.match(/:prop:(.+)$/);
+            repPropertyId = repPropMatch?.[1] ?? '';
+          }
+        }
+
+        // Fetch formatted address for matched property
         let repPropertyAddress = '';
         if (repPropertyId) {
           const repProp = await getPropertyById(repPropertyId).catch(() => null);
@@ -270,22 +308,6 @@ router.post('/retell/webhook', async (req, res) => {
             const a = repProp.address;
             repPropertyAddress = [a.line1, a.city, a.state, a.zip].filter(Boolean).join(', ');
           }
-        }
-
-        // If caller is a known rep, look up their Supabase + BuildOps UUIDs; detect multi-property reps
-        let callerRepSupabaseId = '';
-        let callerRepBuildopsId = '';
-        let repIsMultiProperty = false;
-        if (isRep && callerLast10) {
-          const reps = await findRepsByPhone(resolution.buildops_tenant_id, callerLast10).catch(() => []);
-          const distinctPropertyIds = new Set(reps.map(r => r.propertyId).filter(Boolean));
-          repIsMultiProperty = distinctPropertyIds.size > 1;
-          if (!repIsMultiProperty) {
-            const matchedRep = reps.find(r => r.propertyId === repPropertyId) ?? reps[0] ?? null;
-            callerRepSupabaseId = matchedRep?.id ?? '';
-            callerRepBuildopsId = matchedRep?.buildopsRepId ?? '';
-          }
-          // Multi-property: IDs left empty — resolved after match_property confirms the property
         }
 
         const foundResp = {

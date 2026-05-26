@@ -6,7 +6,8 @@
  */
 
 import { getCustomerById, appendToCustomerAllNumbers, appendToCustomerRepresentativeIds } from '../db/customers.js';
-import { createRepresentative } from '../db/representatives.js';
+import { findRepsByPhone, createRepresentative } from '../db/representatives.js';
+import { normalizePhoneLast10 } from '../fuzzy-search.js';
 import { appendToPropertyRepresentativeIds } from '../db/properties.js';
 import { updateJobRepresentative } from '../db/jobs.js';
 import { createCustomerRepresentative, createPropertyRepresentative } from '../client.js';
@@ -56,6 +57,7 @@ export async function handleSaveCallerNumber(
       firstName,
       lastName,
       cellPhone: phoneToSave,
+      repSource: 'our_rep',
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -126,6 +128,28 @@ export async function handleAddRepresentative(
     return { result: 'error: could not load customer record' };
   }
 
+  // Dedup: (customer, property, phone, email) — return already_exists if rep is already registered
+  if (phone) {
+    const phoneLast10 = normalizePhoneLast10(phone);
+    const existingReps = await findRepsByPhone(session.tenantId, phoneLast10).catch(() => []);
+    const normalizedInputEmail = email?.toLowerCase().trim() ?? null;
+    const dupe = existingReps.find(r => {
+      if (r.customerId !== customer.buildopsCustomerId) return false;
+      if (r.propertyId !== propertyId) return false;
+      const rowEmail = r.email?.toLowerCase().trim() ?? null;
+      return rowEmail === normalizedInputEmail;
+    });
+    if (dupe) {
+      return {
+        result: JSON.stringify({
+          status: 'already_exists',
+          representative_id: dupe.buildopsRepId ?? dupe.id,
+          name: `${dupe.firstName} ${dupe.lastName}`.trim(),
+        }),
+      };
+    }
+  }
+
   // 1. Create in BuildOps API under the property (blocking — rep must exist in the real account)
   let buildopsRep: { id: string };
   try {
@@ -150,6 +174,7 @@ export async function handleAddRepresentative(
     lastName,
     cellPhone: phone ?? null,
     email: email ?? null,
+    repSource: 'property_rep',
   }).then(supabaseRep => {
     if (supabaseRep) {
       appendToCustomerRepresentativeIds(session.tenantId, customer.id, supabaseRep.id)

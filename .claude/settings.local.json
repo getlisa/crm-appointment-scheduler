@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node get_representatives.ts --id 91ccc9df-7dbe-4fbb-8277-7e2916f3b3b3)",
+      "Bash(node -e ' *)",
+      "Bash(node get_representatives.ts --id 91ccc9df-7dbe-4fbb-8277-7e2916f3b3b3 --contacts)",
+      "Bash(node get_representatives.ts --rep-id f838e382-d6bc-41f6-837e-f55f32ad0ae8)",
+      "Bash(node --loader ts-node/esm tests/buildops/api_endpoints/create_property_representative.ts --property-id dc1fb42a-db15-4e82-9d50-8233879b5c49 --first-name \"Billing POC: Clara\" --last-name \"TestRep\" --phone 832-555-0001 --email billing@claracustomer.com)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\devic\\\\Desktop\\\\crm-appointment-scheduler\" -Recurse -Filter \"*representatives*\" -ErrorAction SilentlyContinue)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\devic\\\\Desktop\\\\crm-appointment-scheduler\" -Recurse -Filter \".env*\")",
+      "Bash(mkdir -p /mnt/c/Users/devic/Desktop/crm-appointment-scheduler/tests/buildops/setup)"
+    ],
+    "additionalDirectories": [
+      "\\mnt\\c\\Users\\devic\\Desktop\\crm-appointment-scheduler\\tests\\buildops"
+    ]
+  }
+}
