@@ -68,6 +68,7 @@ export interface RepresentativeRow {
   isDoNotCall: boolean;
   isEmailOptOut: boolean;
   isSmsOptOut: boolean;
+  repSource: 'our_rep' | 'property_rep';
   createdAt: string;
   updatedAt: string;
   version: number;

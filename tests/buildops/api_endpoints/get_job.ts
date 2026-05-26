@@ -17,7 +17,9 @@ const supabase = createClient(
 );
 
 const DEFAULT_JOB_ID = '2df753ce-9bf2-4d86-aed1-fc09aa1126b9';
-const JOB_ID = process.argv[2] ?? DEFAULT_JOB_ID;
+const idFlagIdx     = process.argv.indexOf('-id');
+const numberFlagIdx = process.argv.indexOf('-number');
+const rawArg        = idFlagIdx !== -1 ? process.argv[idFlagIdx + 1] : process.argv[2];
 
 async function getAccessToken(): Promise<string> {
   const res = await fetch(`${BASE_URL}/auth/token`, {
@@ -29,9 +31,28 @@ async function getAccessToken(): Promise<string> {
   return (await res.json()).access_token;
 }
 
+async function resolveJobId(token: string): Promise<string> {
+  // -number <jobNumber> → look up UUID via list endpoint
+  if (numberFlagIdx !== -1) {
+    const jobNumber = process.argv[numberFlagIdx + 1];
+    if (!jobNumber) throw new Error('Missing value for -number flag');
+    const params = new URLSearchParams({ job_number: jobNumber, page_size: '5', page: '0' });
+    const res = await fetch(`${BASE_URL}/jobs?${params}`, {
+      headers: { Authorization: `Bearer ${token}`, tenantId: TENANT_ID, Accept: 'application/json' },
+    });
+    const data = await res.json() as { items?: { id: string; jobNumber: string }[] };
+    const match = data.items?.find(j => j.jobNumber === jobNumber) ?? data.items?.[0];
+    if (!match) throw new Error(`No job found with jobNumber "${jobNumber}"`);
+    console.log(`Resolved "${jobNumber}" → ${match.id}\n`);
+    return match.id;
+  }
+  return rawArg ?? DEFAULT_JOB_ID;
+}
+
 async function main() {
   const token = await getAccessToken();
   console.log('Token acquired.\n');
+  const JOB_ID = await resolveJobId(token);
 
   const res = await fetch(`${BASE_URL}/jobs/${JOB_ID}`, {
     headers: {

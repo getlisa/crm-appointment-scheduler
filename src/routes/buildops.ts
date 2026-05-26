@@ -291,9 +291,9 @@ router.post('/retell/webhook', async (req, res) => {
         if (!isRep && callerLast10) {
           const sourceIdx = customer.allNumbers.indexOf(callerLast10);
           const rawSource = sourceIdx >= 0 ? (customer.allNumbersSources[sourceIdx] ?? '') : '';
-          if (rawSource.startsWith('rep:')) {
+          if (rawSource.startsWith('our_rep:') || rawSource.startsWith('property_rep:')) {
             isRep = true;
-            const repNameMatch = rawSource.match(/^rep:[^:]+:([^:]+?)(?::prop:|$)/);
+            const repNameMatch = rawSource.match(/^(?:our_rep|property_rep):[^:]+:([^:]+?)(?::prop:|$)/);
             callerRepName = repNameMatch?.[1] ?? '';
             const repPropMatch = rawSource.match(/:prop:(.+)$/);
             repPropertyId = repPropMatch?.[1] ?? '';

@@ -16,14 +16,21 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-// Usage: npx tsx get_representatives.ts <phone>
-//        npx tsx get_representatives.ts --id <buildops_customer_id>
-const idFlag = process.argv.indexOf('--id');
+// Usage: node get_representatives.ts <phone>
+//        node get_representatives.ts --id <buildops_customer_id>
+//        node get_representatives.ts --id <buildops_customer_id> --contacts   ← customer-side contacts
+//        node get_representatives.ts --rep-id <buildops_rep_uuid>             ← single rep by UUID
+const idFlag       = process.argv.indexOf('--id');
+const repIdFlag    = process.argv.indexOf('--rep-id');
+const USE_CONTACTS = process.argv.includes('--contacts');
+const SINGLE_REP_ID = repIdFlag !== -1 ? process.argv[repIdFlag + 1] : null;
 const DIRECT_CUSTOMER_ID = idFlag !== -1 ? process.argv[idFlag + 1] : null;
-const INBOUND_PHONE = DIRECT_CUSTOMER_ID ? null : process.argv[2];
-if (!INBOUND_PHONE && !DIRECT_CUSTOMER_ID) {
-  console.error('Usage: npx tsx get_representatives.ts <phone>');
-  console.error('       npx tsx get_representatives.ts --id <buildops_customer_id>');
+const INBOUND_PHONE = (DIRECT_CUSTOMER_ID || SINGLE_REP_ID) ? null : (process.argv[2]?.startsWith('--') ? null : process.argv[2]);
+if (!INBOUND_PHONE && !DIRECT_CUSTOMER_ID && !SINGLE_REP_ID) {
+  console.error('Usage: node get_representatives.ts <phone>');
+  console.error('       node get_representatives.ts --id <buildops_customer_id>');
+  console.error('       node get_representatives.ts --id <buildops_customer_id> --contacts');
+  console.error('       node get_representatives.ts --rep-id <buildops_rep_uuid>');
   process.exit(1);
 }
 
@@ -74,15 +81,18 @@ interface Rep {
   version: number;
 }
 
-async function getRepresentatives(token: string, customerId: string): Promise<Rep[]> {
+async function getRepresentatives(token: string, customerId: string, contacts = false): Promise<Rep[]> {
   const results: Rep[] = [];
   let page = 0;
+  const endpoint = contacts
+    ? `${BASE_URL}/customers/${customerId}/representatives`
+    : `${BASE_URL}/customers/${customerId}/our-representatives`;
 
   while (true) {
-    const res = await fetch(`${BASE_URL}/customers/${customerId}/our-representatives?page=${page}&page_size=100`, {
+    const res = await fetch(`${endpoint}?page=${page}&page_size=100`, {
       headers: { Authorization: `Bearer ${token}`, tenantId: TENANT_ID, Accept: 'application/json' },
     });
-    if (!res.ok) throw new Error(`GET our-representatives failed (${res.status}): ${await res.text()}`);
+    if (!res.ok) throw new Error(`GET ${contacts ? 'representatives' : 'our-representatives'} failed (${res.status}): ${await res.text()}`);
     const data = await res.json() as { items?: Rep[] };
     const items = data.items ?? [];
     results.push(...items);
@@ -93,16 +103,47 @@ async function getRepresentatives(token: string, customerId: string): Promise<Re
   return results;
 }
 
+async function getRepById(token: string, repId: string): Promise<Record<string, unknown>> {
+  const res = await fetch(`${BASE_URL}/representatives/${repId}`, {
+    headers: { Authorization: `Bearer ${token}`, tenantId: TENANT_ID, Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`GET /representatives/${repId} failed (${res.status}): ${await res.text()}`);
+  return res.json() as Promise<Record<string, unknown>>;
+}
+
 async function main() {
   const token = await getAccessToken();
-  console.log('Token acquired.');
+  console.log('Token acquired.\n');
 
+  // ── Single rep by UUID ───────────────────────────────────────────────────────
+  if (SINGLE_REP_ID) {
+    const r = await getRepById(token, SINGLE_REP_ID);
+    console.log('=== Representative ===');
+    console.log(`ID           : ${r['id']}`);
+    console.log(`Name         : ${r['name'] ?? [r['firstName'], r['lastName']].filter(Boolean).join(' ')}`);
+    console.log(`Contact Role : ${r['contactRole'] ?? '(null)'}`);
+    console.log(`Contact Type : ${r['contactType'] ?? '(null)'}`);
+    console.log(`Cell Phone   : ${r['cellPhone'] ?? '(null)'}`);
+    console.log(`Landline     : ${r['landlinePhone'] ?? '(null)'}`);
+    console.log(`Email        : ${r['email'] ?? '(null)'}`);
+    console.log(`Best Contact : ${r['bestContact'] ?? '(null)'}`);
+    console.log(`Customer ID  : ${r['customerId'] ?? '(null)'}`);
+    console.log(`Property ID  : ${r['propertyId'] ?? '(null)'}`);
+    console.log(`Active       : ${r['isActive']}`);
+    console.log(`Status       : ${r['status'] ?? '(null)'}`);
+    console.log('\n=== Raw ===');
+    console.log(JSON.stringify(r, null, 2));
+    return;
+  }
+
+  // ── All reps for a customer ──────────────────────────────────────────────────
   const customer = DIRECT_CUSTOMER_ID
     ? await lookupCustomerById(DIRECT_CUSTOMER_ID)
     : await lookupCustomerByPhone(INBOUND_PHONE!);
-  console.log(`Customer: "${customer.name}" (id: ${customer.id})\n`);
+  console.log(`Customer: "${customer.name}" (id: ${customer.id})`);
+  console.log(`Mode: ${USE_CONTACTS ? 'customer contacts (/representatives)' : 'internal staff (/our-representatives)'}\n`);
 
-  const reps = await getRepresentatives(token, customer.id);
+  const reps = await getRepresentatives(token, customer.id, USE_CONTACTS);
   console.log(`Representatives: ${reps.length}`);
 
   if (reps.length === 0) {

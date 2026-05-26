@@ -57,6 +57,7 @@ export async function handleSaveCallerNumber(
       firstName,
       lastName,
       cellPhone: phoneToSave,
+      repSource: 'our_rep',
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -173,6 +174,7 @@ export async function handleAddRepresentative(
     lastName,
     cellPhone: phone ?? null,
     email: email ?? null,
+    repSource: 'property_rep',
   }).then(supabaseRep => {
     if (supabaseRep) {
       appendToCustomerRepresentativeIds(session.tenantId, customer.id, supabaseRep.id)
