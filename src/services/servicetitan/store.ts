@@ -20,6 +20,19 @@ function normalizePhoneForLookup(phone: string | null | undefined): string | nul
   return digits.length ? digits : null;
 }
 
+function getContactTypeName(contact: { type?: string | null }): string {
+  return String(contact.type ?? '').toLowerCase().trim();
+}
+
+function isPhoneContact(contact: { type?: string | null }): boolean {
+  const t = getContactTypeName(contact);
+  return t === 'phone' || t === 'mobilephone';
+}
+
+function isEmailContact(contact: { type?: string | null }): boolean {
+  return getContactTypeName(contact) === 'email';
+}
+
 
 export async function upsertServiceTitanSnapshot(params: {
   tenantId: number;
@@ -214,27 +227,40 @@ export async function upsertServiceTitanJobTypes(params: {
 export async function upsertServiceTitanCustomers(params: {
   tenantId: number;
   customers: ServiceTitanCustomerApiModel[];
+  includeContacts?: boolean;
 }) {
+  const includeContacts = params.includeContacts ?? true;
   const now = new Date().toISOString();
   const rows = params.customers.map((customer) => {
-    const contacts = Array.isArray(customer.contacts) ? customer.contacts : [];
-    const phone = contacts
-      .map((c) => String(c.value ?? '').trim())
-      .find((v) => v.length > 0) ?? null;
-    return {
+    const base = {
       tenant_id: params.tenantId,
       customer_id: customer.id,
       name: customer.name ?? null,
-      phone,
-      normalized_phone: normalizePhoneForLookup(phone),
       address_street: customer.address?.street ?? null,
       address_unit: customer.address?.unit ?? null,
       address_city: customer.address?.city ?? null,
       address_state: customer.address?.state ?? null,
       address_zip: customer.address?.zip ?? null,
       address_country: customer.address?.country ?? null,
-      raw_contacts: contacts,
       updated_at: now,
+    };
+
+    if (!includeContacts) return base;
+
+    const contacts = Array.isArray(customer.contacts) ? customer.contacts : [];
+    const phoneContact = contacts.find(isPhoneContact);
+    const phone = phoneContact
+      ? String(phoneContact.phoneSettings?.phoneNumber ?? phoneContact.value ?? '').trim() || null
+      : null;
+    const emailContact = contacts.find(isEmailContact);
+    const email = emailContact ? String(emailContact.value ?? '').trim() || null : null;
+
+    return {
+      ...base,
+      phone,
+      normalized_phone: normalizePhoneForLookup(phone),
+      email,
+      raw_contacts: contacts,
     };
   });
   if (!rows.length) return;

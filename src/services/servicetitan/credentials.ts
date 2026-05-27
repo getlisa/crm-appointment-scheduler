@@ -35,12 +35,14 @@ export type TenantConfig = {
   timezone: string;
   campaignId: string | null;
   fallbackTechnicianId: number | null;
+  lastSyncAt: string | null;
+  contactsSyncedAt: string | null;
 };
 
 export async function loadTenantCredentials(tenantId: number): Promise<TenantConfig> {
   const { data, error } = await supabaseAdmin
     .from('servicetitan_tenants')
-    .select('tenant_id,client_id,client_secret,app_key,timezone,campaign_id,fallback_technician_id')
+    .select('tenant_id,client_id,client_secret,app_key,timezone,campaign_id,fallback_technician_id,last_sync_at,contacts_synced_at')
     .eq('tenant_id', tenantId)
     .single();
 
@@ -58,5 +60,25 @@ export async function loadTenantCredentials(tenantId: number): Promise<TenantCon
     timezone: data.timezone,
     campaignId: data.campaign_id ?? null,
     fallbackTechnicianId: data.fallback_technician_id ?? null,
+    lastSyncAt: data.last_sync_at ?? null,
+    contactsSyncedAt: data.contacts_synced_at ?? null,
   };
+}
+
+export async function updateContactsSyncedAt(tenantId: number, syncedAt: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('servicetitan_tenants')
+    .update({ contacts_synced_at: syncedAt })
+    .eq('tenant_id', tenantId);
+
+  if (error) throw new Error(`Failed to update contacts_synced_at: ${error.message}`);
+}
+
+export async function updateLastSyncAt(tenantId: number, syncedAt: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('servicetitan_tenants')
+    .update({ last_sync_at: syncedAt })
+    .eq('tenant_id', tenantId);
+
+  if (error) throw new Error(`Failed to update last_sync_at: ${error.message}`);
 }

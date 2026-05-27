@@ -6,6 +6,7 @@ import {
   type ServiceTitanAppointmentApiModel,
   type ServiceTitanAssignmentApiModel,
   type ServiceTitanAuthCredentials,
+  type ServiceTitanContact,
   type ServiceTitanCustomerApiModel,
   type ServiceTitanJobTypeApiModel,
   type ServiceTitanLocationApiModel,
@@ -332,6 +333,53 @@ export class ServiceTitanClient {
       `/crm/v2/tenant/${this.credentials.tenantId}/customers`,
       body
     );
+  }
+
+  async getAllContacts(modifiedOnOrAfter?: string | null): Promise<ServiceTitanContact[]> {
+    // API requires either modifiedOnOrAfter or modifiedBefore — fall back to epoch for full sync.
+    const sinceDate = modifiedOnOrAfter ?? '2000-01-01T00:00:00Z';
+    const pageSize = 500;
+    const all: ServiceTitanContact[] = [];
+    let page = 1;
+    while (true) {
+      const res = await this.apiRequest<ServiceTitanPagedResponse<ServiceTitanContact>>(
+        `/crm/v2/tenant/${this.credentials.tenantId}/customers/contacts`,
+        { page, pageSize, includeTotal: true, modifiedOnOrAfter: sinceDate }
+      );
+      const batch = res.data ?? [];
+      if (page === 1 && batch.length > 0) {
+        console.log('[ServiceTitan] Contacts sample (first item):', JSON.stringify(batch[0]));
+      }
+      all.push(...batch);
+      console.log('[ServiceTitan] Contacts page', { page, fetched: batch.length, total: all.length, hasMore: res.hasMore });
+      if (!res.hasMore) break;
+      page += 1;
+    }
+    console.log('[ServiceTitan] Contacts fetched', { count: all.length, modifiedOnOrAfter: sinceDate });
+    return all;
+  }
+
+  // Merges contacts fetched from the bulk contacts endpoint onto customer objects by customerId.
+  mergeContactsIntoCustomers(
+    customers: ServiceTitanCustomerApiModel[],
+    contacts: ServiceTitanContact[]
+  ): ServiceTitanCustomerApiModel[] {
+    const byCustomerId = new Map<number, ServiceTitanContact[]>();
+    for (const contact of contacts) {
+      const cid = Number(contact.customerId);
+      if (!cid) continue;
+      const list = byCustomerId.get(cid) ?? [];
+      list.push(contact);
+      byCustomerId.set(cid, list);
+    }
+    const matched = customers.map((c) => ({ ...c, contacts: byCustomerId.get(Number(c.id)) ?? [] }));
+    const withContacts = matched.filter((c) => c.contacts.length > 0).length;
+    console.log('[ServiceTitan] mergeContactsIntoCustomers', {
+      customers: customers.length,
+      contacts: contacts.length,
+      customersWithContacts: withContacts,
+    });
+    return matched;
   }
 
   async findLocations(params: {
