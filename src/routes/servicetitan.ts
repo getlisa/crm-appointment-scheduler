@@ -519,6 +519,21 @@ function normalizeAddressPart(value: string | null | undefined): string {
     .replace(/\s+/g, ' ');
 }
 
+const COUNTRY_TO_ISO2: Record<string, string> = {
+  'united states': 'US',
+  'united states of america': 'US',
+  'usa': 'US',
+  'u.s.a.': 'US',
+  'u.s.': 'US',
+  'canada': 'CA',
+  'mexico': 'MX',
+};
+
+function normalizeCountry(country: string): string {
+  const key = country.trim().toLowerCase();
+  return COUNTRY_TO_ISO2[key] ?? country.trim();
+}
+
 function isSameAddress(
   left: { street?: string | null; unit?: string | null; city?: string | null; state?: string | null; zip?: string | null; country?: string | null },
   right: { street?: string | null; unit?: string | null; city?: string | null; state?: string | null; zip?: string | null; country?: string | null }
@@ -564,7 +579,7 @@ async function resolveCustomerAndLocationIds(params: {
     );
   }
 
-  const addr = params.address;
+  const addr = { ...params.address, country: normalizeCountry(params.address.country) };
   let customerCreated = false;
   let locationCreated = false;
 
