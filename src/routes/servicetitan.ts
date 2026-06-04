@@ -615,6 +615,7 @@ async function resolveCustomerAndLocationIds(params: {
     console.log('[resolveCustomer] no existing customer found, creating new', { tenantId: params.tenantId, phone: params.phone });
     customer = await params.client.createCustomer({
       name: params.customerName,
+      type: 'Residential',
       address: addr,
       locations: [
         {
