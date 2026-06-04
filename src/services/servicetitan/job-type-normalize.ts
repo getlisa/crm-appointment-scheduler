@@ -106,6 +106,11 @@ export function normalizeJobTypeRecord(raw: Record<string, unknown>): Normalized
     raw.skills ?? raw.Skills ?? raw.tradeSkills ?? raw.TradeSkills ?? raw.requiredSkills
   );
 
+  const skillNames = skills.map((s) => s.name ?? '').filter(Boolean);
+  const resolvedSkills = skillNames.length > 0
+    ? skillNames
+    : name ? [name.toUpperCase()] : [];
+
   const priority = pickStr(raw.priority ?? raw.Priority);
   const businessUnitId = firstBusinessUnitId(raw);
 
@@ -115,7 +120,7 @@ export function normalizeJobTypeRecord(raw: Record<string, unknown>): Normalized
     code,
     summary,
     durationSeconds,
-    skills: skills.map((s) => s.name ?? '').filter(Boolean),
+    skills: resolvedSkills,
     priority,
     businessUnitId,
   };
