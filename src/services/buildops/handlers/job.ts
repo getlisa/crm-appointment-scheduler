@@ -12,7 +12,7 @@ import { getPropertyById } from '../db/properties.js';
 import { setJobCreated } from '../db/inbound-calls.js';
 import { resolveByTenantId } from '../db/tenants.js';
 import { upsertJob, updateJobRepresentative } from '../db/jobs.js';
-import { getRepById } from '../db/representatives.js';
+import { getRepById, getRepsByProperty, getRepsByCustomer } from '../db/representatives.js';
 import { env } from '../../../config/env.js';
 import type {
   BuildOpsContext,
@@ -186,6 +186,26 @@ export async function handlePrepareJob(
   if (!callerRepBuildopsId && callerRepSupabaseId) {
     const rep = await getRepById(session.tenantId, callerRepSupabaseId).catch(() => null);
     callerRepBuildopsId = rep?.buildopsRepId ?? '';
+  }
+
+  // If still no rep, fall back to the property's first active rep then the customer's.
+  // BuildOps' accounting sync reads customerRepSortKey on the job; when customerRepId is
+  // absent that field is null and their pipeline throws "Cannot read properties of null
+  // (reading 'sortKey')" → SyncFailed. Always stamping a rep prevents that crash.
+  if (!callerRepBuildopsId) {
+    const propReps = await getRepsByProperty(session.tenantId, customerPropertyId).catch(() => []);
+    const fallback = propReps.find(r => r.buildopsRepId) ?? null;
+    if (fallback) {
+      callerRepBuildopsId = fallback.buildopsRepId!;
+      console.log('[buildops] prepare_job rep fallback (property)', { repId: callerRepBuildopsId, propertyId: customerPropertyId });
+    } else {
+      const custReps = await getRepsByCustomer(session.tenantId, customer.buildopsCustomerId).catch(() => []);
+      const custFallback = custReps.find(r => r.buildopsRepId) ?? null;
+      if (custFallback) {
+        callerRepBuildopsId = custFallback.buildopsRepId!;
+        console.log('[buildops] prepare_job rep fallback (customer)', { repId: callerRepBuildopsId, customerId: customer.buildopsCustomerId });
+      }
+    }
   }
 
   const pendingJob: PendingJobData = {

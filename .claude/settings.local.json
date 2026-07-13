@@ -8,7 +8,8 @@
       "Bash(node --loader ts-node/esm tests/buildops/api_endpoints/create_property_representative.ts --property-id dc1fb42a-db15-4e82-9d50-8233879b5c49 --first-name \"Billing POC: Clara\" --last-name \"TestRep\" --phone 832-555-0001 --email billing@claracustomer.com)",
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\devic\\\\Desktop\\\\crm-appointment-scheduler\" -Recurse -Filter \"*representatives*\" -ErrorAction SilentlyContinue)",
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\devic\\\\Desktop\\\\crm-appointment-scheduler\" -Recurse -Filter \".env*\")",
-      "Bash(mkdir -p /mnt/c/Users/devic/Desktop/crm-appointment-scheduler/tests/buildops/setup)"
+      "Bash(mkdir -p /mnt/c/Users/devic/Desktop/crm-appointment-scheduler/tests/buildops/setup)",
+      "Bash(npx ts-node *)"
     ],
     "additionalDirectories": [
       "\\mnt\\c\\Users\\devic\\Desktop\\crm-appointment-scheduler\\tests\\buildops"

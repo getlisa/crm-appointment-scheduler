@@ -1,0 +1,172 @@
+{
+  "agent_id": "",
+  "channel": "voice",
+  "last_modification_timestamp": 1781486683291,
+  "agent_name": "Crockett Facilities Main Router",
+  "response_engine": {
+    "type": "conversation-flow",
+    "version": 19,
+    "conversation_flow_id": "conversation_flow_c45e3fec94a5"
+  },
+  "language": "en-US",
+  "data_storage_setting": "everything",
+  "opt_in_signed_url": false,
+  "version": 19,
+  "base_version": 18,
+  "assigned_tags": [],
+  "is_published": true,
+  "version_title": "latest published",
+  "post_call_analysis_model": "gpt-4.1-mini",
+  "pii_config": {
+    "mode": "post_call",
+    "categories": []
+  },
+  "handbook_config": {
+    "natural_filler_words": true,
+    "speech_normalization": false
+  },
+  "voice_id": "11labs-Grace",
+  "voice_temperature": 1,
+  "voice_speed": 1,
+  "enable_dynamic_voice_speed": true,
+  "volume": 1,
+  "max_call_duration_ms": 3600000,
+  "interruption_sensitivity": 0.72,
+  "responsiveness": 0.73,
+  "enable_dynamic_responsiveness": true,
+  "normalize_for_speech": false,
+  "allow_user_dtmf": false,
+  "user_dtmf_options": {},
+  "conversationFlow": {
+    "conversation_flow_id": "conversation_flow_c45e3fec94a5",
+    "version": 19,
+    "global_prompt": "CONTEXT AWARENESS Current time (Eastern): {{current_time_America/New_York}} 14-day calendar: {{current_calendar_America/New_York}} Business hours: Monday, Tuesday, Wednesday, Thursday, Friday: 7:30 AM - 3:30 PM Office address: 4438 Lottsford Vista Road, Lanham, MD 20706 Instructions: - Always use the America/New_York timezone (Eastern) to interpret any date or time mentioned by the caller. - If the caller says things like \"next Friday\", \"this weekend\", \"tomorrow\", or \"in the afternoon\", use the calendar and time to determine the exact date and time they mean. - When confirming or suggesting next-day service scheduling, clearly state the interpreted date — e.g., \"You mean Monday, May 4th 2026, correct?\" - Use the current time to determine whether the call is within business hours (Monday–Friday 7:30 AM–3:30 PM Eastern) or after hours, and behave accordingly.",
+    "nodes": [
+      {
+        "name": "Logic Split Node",
+        "edges": [
+          {
+            "destination_node_id": "node-1759368276518",
+            "id": "edge-1759368074476",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "If {{current_time_America/New_York}} is within office hours "
+            }
+          }
+        ],
+        "id": "node-1759367648646",
+        "else_edge": {
+          "destination_node_id": "node-1759368139749",
+          "id": "edge-1759367648646",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Else"
+          }
+        },
+        "type": "branch",
+        "display_position": {
+          "x": 294,
+          "y": 366
+        }
+      },
+      {
+        "agent_id": "agent_90c739ea2b2eecce4289482aec",
+        "edge": {
+          "id": "edge-1759368139750",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Transfer failed"
+          }
+        },
+        "webhook_setting": "only_destination_agent",
+        "name": "After Hours",
+        "agent_version": "latest_published",
+        "post_call_analysis_setting": "only_destination_agent",
+        "keep_current_voice": true,
+        "id": "node-1759368139749",
+        "type": "agent_swap",
+        "display_position": {
+          "x": 990,
+          "y": 582
+        },
+        "keep_current_language": true
+      },
+      {
+        "agent_id": "agent_a5a1318eedae549ea002e96aa2",
+        "edge": {
+          "id": "edge-1759368276518",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Transfer failed"
+          }
+        },
+        "webhook_setting": "only_destination_agent",
+        "name": "Office Hours",
+        "agent_version": "latest_published",
+        "post_call_analysis_setting": "only_destination_agent",
+        "keep_current_voice": true,
+        "id": "node-1759368276518",
+        "type": "agent_swap",
+        "display_position": {
+          "x": 990,
+          "y": 150
+        },
+        "keep_current_language": true
+      }
+    ],
+    "components": [
+      {
+        "name": "Component L1",
+        "start_node_id": "conversation-1773670686831",
+        "conversation_flow_component_id": "cf-component-1773670686831",
+        "nodes": [
+          {
+            "name": "Conversation",
+            "edges": [],
+            "id": "conversation-1773670686831",
+            "type": "conversation",
+            "display_position": {
+              "x": 200,
+              "y": 100
+            },
+            "instruction": {
+              "type": "prompt",
+              "text": "Describe what the AI should say or do"
+            }
+          },
+          {
+            "name": "Exit Component",
+            "id": "component-end-1773670686831",
+            "type": "end",
+            "display_position": {
+              "x": 600,
+              "y": 100
+            },
+            "instruction": {
+              "type": "static_text",
+              "text": "Component completed"
+            }
+          }
+        ],
+        "user_modified_timestamp": 1773670686831,
+        "tools": []
+      }
+    ],
+    "start_node_id": "node-1759367648646",
+    "start_speaker": "agent",
+    "model_choice": {
+      "type": "cascading",
+      "model": "gpt-4.1"
+    },
+    "knowledge_base_ids": [],
+    "kb_config": {
+      "top_k": 3,
+      "filter_score": 0.6
+    },
+    "begin_tag_display_position": {
+      "x": 14.46604899791112,
+      "y": 379.322317354746
+    },
+    "is_published": true
+  }
+}

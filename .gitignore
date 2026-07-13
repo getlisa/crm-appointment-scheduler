@@ -4,3 +4,4 @@ node_modules/
 package-lock.json
 tests/buildops/output/*
 docs/buildops/handoff_docs/*
+.claude/
