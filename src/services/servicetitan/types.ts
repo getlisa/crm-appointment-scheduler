@@ -25,9 +25,24 @@ export type ServiceTitanAddress = {
 };
 
 export type ServiceTitanContact = {
-  type?: unknown;
+  id?: number;
+  customerId?: number;
+  type?: string | null;
   value?: string | null;
   memo?: string | null;
+  modifiedOn?: string | null;
+  createdOn?: string | null;
+  phoneSettings?: {
+    phoneNumber?: string | null;
+    doNotText?: boolean;
+  } | null;
+  preferences?: {
+    jobRemindersEnabled?: boolean;
+    marketingUpdatesEnabled?: boolean;
+    invoiceStatementNotification?: boolean;
+    invoiceNotification?: boolean;
+    statementNotification?: boolean;
+  } | null;
 };
 
 export type ServiceTitanCustomerApiModel = {

@@ -9,7 +9,7 @@ import {
   resolveNoDateSearchAnchorYmd,
 } from '../services/servicetitan/date-window.js';
 import { env } from '../config/env.js';
-import { loadTenantCredentials, saveTenantCredentials } from '../services/servicetitan/credentials.js';
+import { loadTenantCredentials, saveTenantCredentials, updateLastSyncAt, updateContactsSyncedAt } from '../services/servicetitan/credentials.js';
 import { buildServiceTitanJobsPayload } from '../services/servicetitan/job-book-payload.js';
 import { computeAgentAvailabilityCheck, computeAgentDaySlotsMode } from '../services/servicetitan/agent-check.js';
 import { resolveJobTypeFromReason, type RetellJobTypeKbRow } from '../services/servicetitan/job-types-kb.js';
@@ -519,6 +519,21 @@ function normalizeAddressPart(value: string | null | undefined): string {
     .replace(/\s+/g, ' ');
 }
 
+const COUNTRY_TO_ISO2: Record<string, string> = {
+  'united states': 'US',
+  'united states of america': 'US',
+  'usa': 'US',
+  'u.s.a.': 'US',
+  'u.s.': 'US',
+  'canada': 'CA',
+  'mexico': 'MX',
+};
+
+function normalizeCountry(country: string): string {
+  const key = country.trim().toLowerCase();
+  return COUNTRY_TO_ISO2[key] ?? country.trim();
+}
+
 function isSameAddress(
   left: { street?: string | null; unit?: string | null; city?: string | null; state?: string | null; zip?: string | null; country?: string | null },
   right: { street?: string | null; unit?: string | null; city?: string | null; state?: string | null; zip?: string | null; country?: string | null }
@@ -564,7 +579,7 @@ async function resolveCustomerAndLocationIds(params: {
     );
   }
 
-  const addr = params.address;
+  const addr = { ...params.address, country: normalizeCountry(params.address.country) };
   let customerCreated = false;
   let locationCreated = false;
 
@@ -580,6 +595,7 @@ async function resolveCustomerAndLocationIds(params: {
     await upsertServiceTitanCustomers({
       tenantId: params.tenantId,
       customers: phoneMatchedCustomers,
+      includeContacts: false,
     });
     customer = phoneMatchedCustomers[0];
   }
@@ -598,6 +614,7 @@ async function resolveCustomerAndLocationIds(params: {
       await upsertServiceTitanCustomers({
         tenantId: params.tenantId,
         customers: addressMatchedCustomers,
+        includeContacts: false,
       });
       customer =
         addressMatchedCustomers.find((c) => (c.address ? isSameAddress(c.address, addr) : false)) ??
@@ -613,6 +630,7 @@ async function resolveCustomerAndLocationIds(params: {
     console.log('[resolveCustomer] no existing customer found, creating new', { tenantId: params.tenantId, phone: params.phone });
     customer = await params.client.createCustomer({
       name: params.customerName,
+      type: 'Residential',
       address: addr,
       locations: [
         {
@@ -625,6 +643,7 @@ async function resolveCustomerAndLocationIds(params: {
     await upsertServiceTitanCustomers({
       tenantId: params.tenantId,
       customers: [customer],
+      includeContacts: false,
     });
   }
 
@@ -774,13 +793,15 @@ serviceTitanRouter.post('/connect', async (req, res) => {
 serviceTitanRouter.post('/sync', async (req, res) => {
   try {
     const query = syncQuerySchema.parse(req.query);
-    const { credentials } = await loadTenantCredentials(query.tenantId);
+    const { credentials, contactsSyncedAt } = await loadTenantCredentials(query.tenantId);
     const client = new ServiceTitanClient(credentials);
-    const [technicians, jobTypes, customers, locations] = await Promise.all([
+    const syncStartedAt = new Date().toISOString();
+    const [technicians, jobTypes, customers, locations, contacts] = await Promise.all([
       client.getTechnicians(),
       client.getAllJobTypes(),
       query.includeCrm ? client.getAllCustomers() : Promise.resolve([]),
       query.includeCrm ? client.getAllLocations() : Promise.resolve([]),
+      query.includeCrm ? client.getAllContacts(contactsSyncedAt) : Promise.resolve([]),
     ]);
 
     await upsertServiceTitanTechnicians({
@@ -792,14 +813,17 @@ serviceTitanRouter.post('/sync', async (req, res) => {
       jobTypes,
     });
     if (query.includeCrm) {
+      const customersWithContacts = client.mergeContactsIntoCustomers(customers, contacts);
       await upsertServiceTitanCustomers({
         tenantId: credentials.tenantId,
-        customers,
+        customers: customersWithContacts,
       });
       await upsertServiceTitanLocations({
         tenantId: credentials.tenantId,
         locations,
       });
+      await updateLastSyncAt(credentials.tenantId, syncStartedAt);
+      await updateContactsSyncedAt(credentials.tenantId, syncStartedAt);
     }
     console.log('[ServiceTitan] sync completed', {
       technicians: technicians.length,
