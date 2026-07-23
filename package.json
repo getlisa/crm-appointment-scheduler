@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "tsx watch src/server.ts && node dist/server.js",
     "check": "tsc -p tsconfig.json --noEmit",
+    "hcp:ingest": "tsx src/scripts/hcp-first-ingest.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
