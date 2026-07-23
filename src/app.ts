@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { serviceTitanRouter } from './routes/servicetitan.js';
 import buildopsRouter from './routes/buildops.js';
+import housecallproRouter from './routes/housecallpro.js';
 
 const app = express();
 app.use(
@@ -20,5 +21,6 @@ app.get('/health', (_req, res) => {
 
 app.use('/api/servicetitan', serviceTitanRouter);
 app.use('/api/buildops', buildopsRouter);
+app.use('/api/housecallpro', housecallproRouter);
 
 export default app;

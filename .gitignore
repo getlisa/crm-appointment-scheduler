@@ -5,3 +5,4 @@ package-lock.json
 tests/buildops/output/*
 docs/buildops/handoff_docs/*
 .claude/
+.git
