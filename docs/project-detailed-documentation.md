@@ -1,6 +1,6 @@
 # CRM Appointment Scheduler - Detailed Project Documentation
 
-## 1) Project overview
+## 1 Project overview
 
 `crm-appointment-scheduler` is a Node.js + TypeScript backend that integrates with ServiceTitan and exposes APIs for:
 

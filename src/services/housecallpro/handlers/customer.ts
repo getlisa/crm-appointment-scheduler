@@ -58,6 +58,15 @@ export async function handleCreateCustomer(
   const mobileArg = (args.mobile_number as string | undefined)?.trim();
   const mobileNumber = mobileArg || (session.caller ? normalizePhoneLast10(session.caller) : undefined);
 
+  // Business rule: customers created by Clara carry a fixed lead source and a
+  // provenance note stamped with the call date. The reason for the visit is not
+  // stored here — it becomes the job's line items in handleBookJob.
+  const callDate = new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
   try {
     const created = await createCustomer(ctx, {
       first_name: firstName,
@@ -67,8 +76,8 @@ export async function handleCreateCustomer(
       mobile_number: mobileNumber || undefined,
       notifications_enabled: true,
       tags: ['Clara'],
-      lead_source: (args.lead_source as string | undefined)?.trim() || 'Clara',
-      notes: (args.notes as string | undefined)?.trim() || undefined,
+      lead_source: 'Clara',
+      notes: `Created by Customer on ${callDate}`,
     });
 
     await upsertCustomer(session.tenantId, created).catch(() => null);
