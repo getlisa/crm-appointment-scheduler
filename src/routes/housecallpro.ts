@@ -90,6 +90,7 @@ function buildInboundResponse(
   fromNumber: string,
   agentId: string | null,
   newNumberDetected = false,
+  leadSourceNumber = '',
 ): object {
   return {
     call_inbound: {
@@ -102,6 +103,7 @@ function buildInboundResponse(
         caller_name: '',
         first_name: '',
         last_name: '',
+        lead_source_number: leadSourceNumber,
         from_number: fromNumber,
         new_number_detected: String(newNumberDetected),
         multiple_matches: 'false',
@@ -269,7 +271,7 @@ router.post('/retell/webhook', async (req, res) => {
       const token = await resolveByInboundNumber(toNumber);
       if (!token) {
         console.error(`[hcp] unknown inbound number: ${toNumber}`);
-        res.json(buildInboundResponse('error', fromNumber, null));
+        res.json(buildInboundResponse('error', fromNumber, null, false, toNumber));
         return;
       }
 
@@ -285,7 +287,7 @@ router.post('/retell/webhook', async (req, res) => {
       console.log('[hcp] phone lookup', { phoneLast10, matchCount: matches.length });
 
       if (matches.length === 0) {
-        res.json(buildInboundResponse('not_found', fromNumber, token.agentId, true));
+        res.json(buildInboundResponse('not_found', fromNumber, token.agentId, true, toNumber));
         return;
       }
 
@@ -303,6 +305,7 @@ router.post('/retell/webhook', async (req, res) => {
               caller_name: customer.firstName ?? customer.name,
               first_name: customer.firstName ?? '',
               last_name: customer.lastName ?? '',
+              lead_source_number: toNumber,
               from_number: fromNumber,
               new_number_detected: 'false',
               multiple_matches: 'false',
@@ -326,6 +329,7 @@ router.post('/retell/webhook', async (req, res) => {
             caller_name: '',
             first_name: '',
             last_name: '',
+            lead_source_number: toNumber,
             from_number: fromNumber,
             new_number_detected: 'false',
             multiple_matches: 'true',
