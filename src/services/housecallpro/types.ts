@@ -202,6 +202,8 @@ export interface HcpCallSessionRow {
   retellCallId: string | null;
   caller: string;
   toNumber: string | null;
+  /** Tracking line parsed from the SIP Diversion header; used for lead-source attribution. */
+  leadSourceNumber: string | null;
   housecallproCustomerId: string | null;
   customerName: string | null;
   matchTier: string | null;

@@ -78,7 +78,9 @@ export async function handleBookJob(
   const notes = resolveNotes(args);
 
   // Attribute the job to the HCP lead source behind the dialed tracking line.
-  const lead = await resolveLeadSource(session.toNumber).catch(() => null);
+  // Prefer the SIP Diversion tracking line (the actual lead source); fall back to
+  // to_number (the shared DID) only when the diversion wasn't captured.
+  const lead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
   const leadSource = lead?.leadName ?? lead?.leadSourceId ?? 'Clara';
 
   // Unscheduled "new job": no `schedule`, no `line_items` — the issue + requested
