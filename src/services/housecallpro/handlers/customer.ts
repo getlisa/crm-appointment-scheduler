@@ -8,6 +8,7 @@
 
 import { createCustomer, createAddress, getCustomerAddresses } from '../client.js';
 import { upsertCustomer, appendAddressId, getCustomerByHcpId } from '../db/customers.js';
+import { resolveLeadSource } from '../db/leadSources.js';
 import { setMatchedCustomer, setServiceAddressMap } from '../db/callsessions.js';
 import { normalizePhoneLast10 } from '../fuzzy-search.js';
 import { toAddressLite, scoreAddress, formatAddress } from '../address.js';
@@ -58,14 +59,17 @@ export async function handleCreateCustomer(
   const mobileArg = (args.mobile_number as string | undefined)?.trim();
   const mobileNumber = mobileArg || (session.caller ? normalizePhoneLast10(session.caller) : undefined);
 
-  // Business rule: customers created by Clara carry a fixed lead source and a
-  // provenance note stamped with the call date. The reason for the visit is not
-  // stored here — it becomes the job's line items in handleBookJob.
+  // Business rule: customers created by Clara are attributed to the lead source
+  // behind the dialed tracking line (falling back to 'Clara' when unknown), carry
+  // a `Clara` tag as a provenance marker, and a note stamped with the call date.
+  // The reason for the visit is not stored here — it becomes the job notes in handleBookJob.
   const callDate = new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
   });
+  const lead = await resolveLeadSource(session.toNumber).catch(() => null);
+  const leadSource = lead?.leadName ?? lead?.leadSourceId ?? 'Clara';
 
   try {
     const created = await createCustomer(ctx, {
@@ -76,7 +80,7 @@ export async function handleCreateCustomer(
       mobile_number: mobileNumber || undefined,
       notifications_enabled: true,
       tags: ['Clara'],
-      lead_source: 'Clara',
+      lead_source: leadSource,
       notes: `Created by Customer on ${callDate}`,
     });
 

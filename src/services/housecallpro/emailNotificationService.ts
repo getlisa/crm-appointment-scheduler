@@ -62,7 +62,7 @@ export async function sendHcpNotification({
         ['Customer', details.customerName || '—'],
         ['Callback Number', details.callbackNumber || 'Not provided'],
         ['Service Address', details.address || 'Not provided'],
-        ['Scheduled', [details.scheduledStart, details.scheduledEnd].filter(Boolean).join(' → ') || 'Not scheduled'],
+        ['Requested availability', [details.scheduledStart, details.scheduledEnd].filter(Boolean).join(' → ') || 'None given'],
         ['Job Number', details.jobNumber || '—'],
       ]
     : [
