@@ -104,7 +104,8 @@ Handles inbound HVAC service calls routed through Retell AI for HouseCall Pro (H
 
 ### Endpoints
 
-- `POST /api/housecallpro/retell/webhook` — Retell lifecycle (`call_inbound` identify+greet, `call_started`, `call_ended`)
+- `POST /api/housecallpro/retell/webhook` — Retell lifecycle. In the live Twilio-Function setup the call is pre-registered (`registerPhoneCall`), so **`call_inbound` never fires** — the session is created at `call_started` (also handles `call_ended`).
+- `POST /api/housecallpro/fn/customer_lookup` — Identify the caller by their phone number (replaces `call_inbound` identification)
 - `POST /api/housecallpro/fn/lookup_customer_fuzzy` — Fuzzy name/zip customer search
 - `POST /api/housecallpro/fn/confirm_customer` — Confirm candidate from multiple matches
 - `POST /api/housecallpro/fn/create_customer` — Create a new customer (non-customer flow)
@@ -127,7 +128,7 @@ The row is mirrored to `housecallpro_jobs` (the requested window is kept there a
 
 ### Lead-source attribution
 
-The number the customer originally dialed is an HCP marketing/tracking line (a Google LSA line, a Yelp line, etc.). HCP forwards the call through a shared Twilio DID into Retell, so Retell's `to_number` is that shared DID — **not** the tracking line. The tracking line is recovered from the SIP **`Diversion`** header (which Retell exposes as the `{{diversion}}` dynamic variable), parsed at `call_inbound`/`call_started`, stored on the call session (`housecallpro_callsessions.lead_source_number`), and surfaced to the agent as `lead_source_number` — see [docs/housecallpro/lead-source-attribution.md](docs/housecallpro/lead-source-attribution.md). At booking time `book_job` (and `create_customer`) resolve `session.leadSourceNumber ?? session.toNumber` against the `housecallpro_lead_sources` table (`lead_phone_no` → `lead_name` / `lead_source_id`) and stamp the resolved lead source onto the job/customer's `lead_source`, falling back to `Clara` when the line has no mapping. This attributes every booked job to the marketing source the customer actually called. (A legacy dedicated-Twilio-number + Function path using `event.CalledVia` is documented as a fallback.)
+The number the customer originally dialed is an HCP marketing/tracking line (a Google LSA line, a Yelp line, etc.). A Twilio Function fronts the tenant number and `registerPhoneCall`s into Retell with `to_number` = the tenant DID and `retell_llm_dynamic_variables.lead_source_number` = the dialed tracking line. Because the call is pre-registered, **`call_inbound` never fires**; the backend reads `lead_source_number` from the **`call_started`** payload and stores it on the call session (`housecallpro_callsessions.lead_source_number`). At booking time `book_job` (and `create_customer`) resolve `session.leadSourceNumber ?? session.toNumber` against the `housecallpro_lead_sources` table (`lead_phone_no` → `lead_name` / `lead_source_id`) and stamp the resolved `lead_name` onto the HCP job's `lead_source`, falling back to `Clara`. **The stamped value must be an exact HCP-configured lead source name**, or HCP rejects the job with `400 "Lead source not found"`. See [docs/housecallpro/lead-source-attribution.md](docs/housecallpro/lead-source-attribution.md). (The SIP `Diversion` header is kept as a fallback source for any non-Function tenant.)
 
 ### Expected Supabase tables
 
@@ -148,7 +149,7 @@ The `housecallpro_cron` Supabase Edge Function keeps `housecallpro_customers` in
 | Doc | Contents |
 |---|---|
 | [docs/housecallpro/endpoint_responses.md](docs/housecallpro/endpoint_responses.md) | Every endpoint's request/response, admin sync, gotchas |
-| [docs/housecallpro/lead-source-attribution.md](docs/housecallpro/lead-source-attribution.md) | How the dialed HCP tracking line is recovered and surfaced as `lead_source_number` |
+| [docs/housecallpro/lead-source-attribution.md](docs/housecallpro/lead-source-attribution.md) | Twilio-Function/`registerPhoneCall` flow, why `call_inbound` never fires, the `call_started` payload, `customer_lookup` identification, and the HCP "lead source must exist" rule |
 
 ---
 
