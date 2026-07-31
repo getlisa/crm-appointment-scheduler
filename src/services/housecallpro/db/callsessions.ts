@@ -18,6 +18,7 @@ function mapRow(row: Record<string, unknown>): HcpCallSessionRow {
     retellCallId: (row.retell_call_id as string | null) ?? null,
     caller: row.caller as string,
     toNumber: (row.to_number as string | null) ?? null,
+    leadSourceNumber: (row.lead_source_number as string | null) ?? null,
     housecallproCustomerId: (row.housecallpro_customer_id as string | null) ?? null,
     customerName: (row.customer_name as string | null) ?? null,
     matchTier: (row.match_tier as string | null) ?? null,
@@ -38,6 +39,7 @@ export async function createCallSession(params: {
   tenantId: string;
   caller: string;
   toNumber?: string | null;
+  leadSourceNumber?: string | null;
   retellCallId?: string | null;
 }): Promise<HcpCallSessionRow> {
   const { data, error } = await supabase
@@ -46,6 +48,7 @@ export async function createCallSession(params: {
       tenant_id: params.tenantId,
       caller: params.caller,
       to_number: params.toNumber ?? null,
+      lead_source_number: params.leadSourceNumber ?? null,
       retell_call_id: params.retellCallId ?? null,
       status: 'active',
     })
@@ -97,6 +100,14 @@ export async function setRetellCallId(sessionId: string, retellCallId: string): 
   await supabase
     .from('housecallpro_callsessions')
     .update({ retell_call_id: retellCallId })
+    .eq('session_id', sessionId);
+}
+
+/** Stores the tracking line parsed from the SIP Diversion header (lead-source attribution). */
+export async function setLeadSourceNumber(sessionId: string, leadSourceNumber: string): Promise<void> {
+  await supabase
+    .from('housecallpro_callsessions')
+    .update({ lead_source_number: leadSourceNumber })
     .eq('session_id', sessionId);
 }
 

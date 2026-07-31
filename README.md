@@ -127,17 +127,17 @@ The row is mirrored to `housecallpro_jobs` (the requested window is kept there a
 
 ### Lead-source attribution
 
-The number the customer originally dialed is an HCP marketing/tracking line (a Google LSA line, a Yelp line, etc.). It is preserved through the telephony flow and surfaced to the webhook as `lead_source_number` (= Retell's `to_number`) — see [docs/housecallpro/lead-source-attribution.md](docs/housecallpro/lead-source-attribution.md) for how the tracking line survives the forward. At booking time `book_job` (and `create_customer`) look that number up in the `housecallpro_lead_sources` table (`lead_phone_no` → `lead_name` / `lead_source_id`) and stamp the resolved lead source onto the job/customer's `lead_source`, falling back to `Clara` when the line has no mapping. This attributes every booked job to the marketing source the customer actually called.
+The number the customer originally dialed is an HCP marketing/tracking line (a Google LSA line, a Yelp line, etc.). HCP forwards the call through a shared Twilio DID into Retell, so Retell's `to_number` is that shared DID — **not** the tracking line. The tracking line is recovered from the SIP **`Diversion`** header (which Retell exposes as the `{{diversion}}` dynamic variable), parsed at `call_inbound`/`call_started`, stored on the call session (`housecallpro_callsessions.lead_source_number`), and surfaced to the agent as `lead_source_number` — see [docs/housecallpro/lead-source-attribution.md](docs/housecallpro/lead-source-attribution.md). At booking time `book_job` (and `create_customer`) resolve `session.leadSourceNumber ?? session.toNumber` against the `housecallpro_lead_sources` table (`lead_phone_no` → `lead_name` / `lead_source_id`) and stamp the resolved lead source onto the job/customer's `lead_source`, falling back to `Clara` when the line has no mapping. This attributes every booked job to the marketing source the customer actually called. (A legacy dedicated-Twilio-number + Function path using `event.CalledVia` is documented as a fallback.)
 
 ### Expected Supabase tables
 
 - `housecallpro_tokens` — one row per HCP tenant (dialed number → API key, agent id, sync cursor)
 - `housecallpro_customers` — mirrored customers (`normalized_mobile` for caller ID, trigram-indexed names, `address_ids`)
-- `housecallpro_callsessions` — active call sessions (match tier, selected slot/address, escalation)
+- `housecallpro_callsessions` — active call sessions (match tier, selected slot/address, escalation, `lead_source_number` tracking line)
 - `housecallpro_jobs` — mirrored job records
 - `housecallpro_lead_sources` — dialed tracking line → HCP lead source (for attribution)
 
-Migrations: [migrations/20260722_001_housecallpro_jobs.sql](migrations/20260722_001_housecallpro_jobs.sql), [migrations/20260723_001_housecallpro_customer_phone_and_sync.sql](migrations/20260723_001_housecallpro_customer_phone_and_sync.sql), [migrations/20260731_001_housecallpro_lead_sources.sql](migrations/20260731_001_housecallpro_lead_sources.sql)
+Migrations: [migrations/20260722_001_housecallpro_jobs.sql](migrations/20260722_001_housecallpro_jobs.sql), [migrations/20260723_001_housecallpro_customer_phone_and_sync.sql](migrations/20260723_001_housecallpro_customer_phone_and_sync.sql), [migrations/20260731_001_housecallpro_lead_sources.sql](migrations/20260731_001_housecallpro_lead_sources.sql), [migrations/20260731_002_housecallpro_callsession_lead_source_number.sql](migrations/20260731_002_housecallpro_callsession_lead_source_number.sql)
 
 ### Sync
 
