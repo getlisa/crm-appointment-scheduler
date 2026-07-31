@@ -133,6 +133,7 @@ The number the customer originally dialed is an HCP marketing/tracking line (a G
 ### Expected Supabase tables
 
 - `housecallpro_tokens` — one row per HCP tenant (dialed number → API key, agent id, sync cursor)
+  > ⚠️ **Do not delete the `id` column from `housecallpro_tokens`.** It is the table's primary-key column (UUID). If it is edited out / dropped while managing tokens in the Supabase table editor, token upserts (`POST /api/housecallpro/admin/token`) and tenant resolution break. Add or edit rows, but leave the `id` column in place.
 - `housecallpro_customers` — mirrored customers (`normalized_mobile` for caller ID, trigram-indexed names, `address_ids`)
 - `housecallpro_callsessions` — active call sessions (match tier, selected slot/address, escalation, `lead_source_number` tracking line)
 - `housecallpro_jobs` — mirrored job records
@@ -148,6 +149,7 @@ The `housecallpro_cron` Supabase Edge Function keeps `housecallpro_customers` in
 
 | Doc | Contents |
 |---|---|
+| [docs/housecallpro/housecallpro.md](docs/housecallpro/housecallpro.md) | **Start here** — integration overview: architecture, call flow, session state, functions, tables, and gotchas |
 | [docs/housecallpro/endpoint_responses.md](docs/housecallpro/endpoint_responses.md) | Every endpoint's request/response, admin sync, gotchas |
 | [docs/housecallpro/lead-source-attribution.md](docs/housecallpro/lead-source-attribution.md) | Twilio-Function/`registerPhoneCall` flow, why `call_inbound` never fires, the `call_started` payload, `customer_lookup` identification, and the HCP "lead source must exist" rule |
 
