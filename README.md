@@ -1,6 +1,6 @@
 # crm-appointment-scheduler
 
-Node backend for ServiceTitan and BuildOps integrations — technician scheduling, inbound call handling, and job creation via AI voice agent.
+Node backend for ServiceTitan, BuildOps, and HouseCall Pro integrations — technician scheduling, inbound call handling, and job creation via AI voice agent.
 
 ---
 
@@ -95,6 +95,60 @@ See [docs/buildops/sync.md](docs/buildops/sync.md) for full details.
 | [docs/buildops/database-schema.md](docs/buildops/database-schema.md) | Supabase table schemas and indexes |
 | [docs/buildops/sync.md](docs/buildops/sync.md) | Full and incremental sync architecture, dirty detection, deletion handling |
 | [buildops_api.md](buildops_api.md) | BuildOps REST API reference (all 16 endpoints) |
+
+---
+
+## HouseCall Pro
+
+Handles inbound HVAC service calls routed through Retell AI for HouseCall Pro (HCP) tenants. Auth is a static per-tenant API key (`Authorization: Token <api_key>` in `housecallpro_tokens`, keyed by the dialed number). When a customer calls, the agent identifies them, resolves the service address, and **logs a job in HCP** — all within the call.
+
+### Endpoints
+
+- `POST /api/housecallpro/retell/webhook` — Retell lifecycle (`call_inbound` identify+greet, `call_started`, `call_ended`)
+- `POST /api/housecallpro/fn/lookup_customer_fuzzy` — Fuzzy name/zip customer search
+- `POST /api/housecallpro/fn/confirm_customer` — Confirm candidate from multiple matches
+- `POST /api/housecallpro/fn/create_customer` — Create a new customer (non-customer flow)
+- `POST /api/housecallpro/fn/match_address` — Fuzzy-match a spoken address to a customer address
+- `POST /api/housecallpro/fn/create_address` — Add a new service address
+- `POST /api/housecallpro/fn/book_job` — Log the service request as a job
+- `POST /api/housecallpro/fn/escalate` — After-Hours request capture
+- `POST /api/housecallpro/admin/token`, `GET /api/housecallpro/admin/tokens`, `POST /api/housecallpro/sync`, `GET /api/housecallpro/admin/sync-status`
+
+### Job creation
+
+`book_job` creates the job in HCP (`POST /jobs`) as an **unscheduled "new job"** — it sends **no `schedule` and no `line_items`**, so the job lands in the office's *New* pipeline for them to schedule themselves. The issue and the caller's requested availability are captured as free text in the job **`notes`**:
+
+```
+Issue Description :- <issue the caller described>
+Job between <requested start> to <requested end>
+```
+
+The row is mirrored to `housecallpro_jobs` (the requested window is kept there as an internal record only — it is not sent to HCP), and the agent tells the caller their request is logged and the team will confirm the appointment time (it never promises a booked slot).
+
+### Lead-source attribution
+
+The number the customer originally dialed is an HCP marketing/tracking line (a Google LSA line, a Yelp line, etc.). It is preserved through the telephony flow and surfaced to the webhook as `lead_source_number` (= Retell's `to_number`) — see [docs/housecallpro/lead-source-attribution.md](docs/housecallpro/lead-source-attribution.md) for how the tracking line survives the forward. At booking time `book_job` (and `create_customer`) look that number up in the `housecallpro_lead_sources` table (`lead_phone_no` → `lead_name` / `lead_source_id`) and stamp the resolved lead source onto the job/customer's `lead_source`, falling back to `Clara` when the line has no mapping. This attributes every booked job to the marketing source the customer actually called.
+
+### Expected Supabase tables
+
+- `housecallpro_tokens` — one row per HCP tenant (dialed number → API key, agent id, sync cursor)
+- `housecallpro_customers` — mirrored customers (`normalized_mobile` for caller ID, trigram-indexed names, `address_ids`)
+- `housecallpro_callsessions` — active call sessions (match tier, selected slot/address, escalation)
+- `housecallpro_jobs` — mirrored job records
+- `housecallpro_lead_sources` — dialed tracking line → HCP lead source (for attribution)
+
+Migrations: [migrations/20260722_001_housecallpro_jobs.sql](migrations/20260722_001_housecallpro_jobs.sql), [migrations/20260723_001_housecallpro_customer_phone_and_sync.sql](migrations/20260723_001_housecallpro_customer_phone_and_sync.sql), [migrations/20260731_001_housecallpro_lead_sources.sql](migrations/20260731_001_housecallpro_lead_sources.sql)
+
+### Sync
+
+The `housecallpro_cron` Supabase Edge Function keeps `housecallpro_customers` in sync one page per run (advancing `housecallpro_tokens.sync_customer_page`), with per-row dirty detection against `housecallpro_updated_at`. First-time ingestion is triggered via `POST /api/housecallpro/sync?no=<number>`.
+
+### Documentation
+
+| Doc | Contents |
+|---|---|
+| [docs/housecallpro/endpoint_responses.md](docs/housecallpro/endpoint_responses.md) | Every endpoint's request/response, admin sync, gotchas |
+| [docs/housecallpro/lead-source-attribution.md](docs/housecallpro/lead-source-attribution.md) | How the dialed HCP tracking line is recovered and surfaced as `lead_source_number` |
 
 ---
 

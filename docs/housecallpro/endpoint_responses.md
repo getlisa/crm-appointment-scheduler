@@ -149,15 +149,23 @@ The new `address_id` becomes the session's selected address, so `book_job` can o
 
 ## Step 3f — Book job
 
-Office-Hours only. Provide the slot in ISO-8601 local time (America/Los_Angeles). `address_id` is optional — the selected address from match/create is used if omitted. Creates the job in HCP (`POST /jobs`) and writes `housecallpro_jobs`.
+Office-Hours only. Creates the job in HCP (`POST /jobs`) as an **unscheduled "new job"** — no `schedule` and no `line_items` are sent, so it lands in the office's New pipeline for them to schedule. `service_name` describes the issue; `scheduled_start`/`scheduled_end` are optional and only capture the caller's *requested* window (recorded in the job `notes` as free text — not a booked time). `address_id` is optional — the selected address from match/create is used if omitted.
+
+The job's `lead_source` is resolved from the dialed tracking line (`to_number` / `lead_source_number`) via `housecallpro_lead_sources`, falling back to `Clara` when no mapping exists. The request writes `housecallpro_jobs` (the requested window is kept there for our records only).
+
+The job `notes` sent to HCP look like:
+```
+Issue Description :- AC not cooling
+Job between 2026-07-24T14:00:00 to 2026-07-24T16:00:00
+```
 
 ```
-curl -X POST http://localhost:8080/api/housecallpro/fn/book_job -H "Content-Type: application/json" -d "{\"call\": {\"call_id\": \"call_abc123\"}, \"args\": {\"scheduled_start\": \"2026-07-24T14:00:00\", \"scheduled_end\": \"2026-07-24T16:00:00\", \"service_name\": \"AC not cooling\"}}"
+curl -X POST http://localhost:8080/api/housecallpro/fn/book_job -H "Content-Type: application/json" -d "{\"call\": {\"call_id\": \"call_abc123\"}, \"args\": {\"service_name\": \"AC not cooling\", \"scheduled_start\": \"2026-07-24T14:00:00\", \"scheduled_end\": \"2026-07-24T16:00:00\"}}"
 ```
 
-**Expected response**
+**Expected response** (no scheduled times; `work_status` is HCP's new-job status, `scheduled:false`)
 ```json
-{"result":"{\"status\":\"created\",\"job_id\":\"job_5f2c...\",\"invoice_number\":\"1042\",\"scheduled_start\":\"2026-07-24T14:00:00\",\"scheduled_end\":\"2026-07-24T16:00:00\"}"}
+{"result":"{\"status\":\"created\",\"job_id\":\"job_5f2c...\",\"invoice_number\":\"1042\",\"work_status\":\"new job\",\"scheduled\":false}"}
 ```
 
 ---
@@ -226,8 +234,8 @@ These require `housecallpro_callsessions.housecallpro_customer_id` to be set —
 **Fix:** call `match_address`/`create_address` first, or pass `address_id`.
 
 ### 5. `book_job` → `"error: job creation failed — HCP POST /jobs → 422 ..."`
-HCP rejected the payload — usually a bad `scheduled_start`/`scheduled_end` format or an `address_id` that does not belong to the customer.
-**Fix:** send ISO-8601 local time `YYYY-MM-DDTHH:MM:SS`; use an `address_id` from this customer's `match_address`/`create_address`.
+HCP rejected the payload — usually an `address_id` that does not belong to the customer. (No `schedule` or `line_items` are sent anymore, so those are no longer a source of 422s.)
+**Fix:** use an `address_id` from this customer's `match_address`/`create_address`.
 
 ### 6. `create_customer` FK error on cache upsert
 The new customer is cached via a composite FK to `housecallpro_tokens(tenant_id)`. If the token row's `tenant_id` differs from the session's, the cache upsert fails (the HCP customer is still created). This should not happen in normal flow since both come from the same token.

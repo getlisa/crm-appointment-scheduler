@@ -1,12 +1,22 @@
 /**
  * Retell function handler: book_job (Office-Hours).
- * Creates a job in HCP for the identified customer + resolved address, persists it
- * to housecallpro_jobs, and records the slot + job on the call session.
+ *
+ * Creates the service request in HCP as an UNSCHEDULED "new job" — no schedule
+ * and no line items are sent, so HCP lands it in the office's New pipeline to
+ * schedule themselves. The issue description and the caller's requested time
+ * window are captured as free text in the job `notes` (for the office's
+ * reference). The job's `lead_source` is resolved from the dialed tracking line
+ * (session.toNumber) via housecallpro_lead_sources.
+ *
+ * The row is persisted to housecallpro_jobs (the caller's requested window is
+ * kept there as our internal record only — it is NOT sent to HCP) and the job +
+ * requested slot are recorded on the call session.
  */
 
 import { createJob } from '../client.js';
 import { insertJob } from '../db/jobs.js';
 import { getCustomerByHcpId } from '../db/customers.js';
+import { resolveLeadSource } from '../db/leadSources.js';
 import { setJobCreated, setSelectedSlot } from '../db/callsessions.js';
 import { sendHcpNotification } from '../emailNotificationService.js';
 import type {
@@ -16,25 +26,35 @@ import type {
   RetellFunctionResult,
 } from '../types.js';
 
-/** Coerces the line_items arg into HCP line items; always yields at least one named item. */
-function resolveLineItems(args: Record<string, unknown>): { name: string; description?: string }[] {
-  const raw = args.line_items;
-  if (Array.isArray(raw)) {
-    const items = raw
-      .map(it => {
-        if (typeof it === 'string') return { name: it.trim() };
-        const obj = it as Record<string, unknown>;
-        const name = (obj.name as string | undefined)?.trim();
-        return name ? { name, description: (obj.description as string | undefined)?.trim() || undefined } : null;
-      })
-      .filter((x): x is { name: string; description?: string } => !!x);
-    if (items.length > 0) return items;
-  }
-  const single =
+/** Human-readable text for the caller's requested time window, or null if none given. */
+function resolveWindowText(args: Record<string, unknown>): string | null {
+  const display = (args.slot_display as string | undefined)?.trim();
+  if (display) return display;
+  const start = (args.scheduled_start as string | undefined)?.trim();
+  const end = (args.scheduled_end as string | undefined)?.trim();
+  if (start && end) return `${start} to ${end}`;
+  if (start) return start;
+  return null;
+}
+
+/**
+ * Builds the job notes for the office. HCP receives no line items or schedule,
+ * so the issue and the requested window live here:
+ *
+ *   Issue Description :- <issue>
+ *   Job between <start> to <end>
+ */
+function resolveNotes(args: Record<string, unknown>): string {
+  const issue =
     (args.service_name as string | undefined)?.trim() ||
     (args.reason as string | undefined)?.trim() ||
-    (args.job_type as string | undefined)?.trim();
-  return [{ name: single || 'Service Request' }];
+    (args.job_type as string | undefined)?.trim() ||
+    'Service request';
+
+  let notes = `Issue Description :- ${issue}`;
+  const window = resolveWindowText(args);
+  if (window) notes += `\nJob between ${window}`;
+  return notes;
 }
 
 export async function handleBookJob(
@@ -55,54 +75,46 @@ export async function handleBookJob(
     return { result: 'error: no address selected — call match_address or create_address first' };
   }
 
-  const scheduledStart = (args.scheduled_start as string | undefined)?.trim();
-  const scheduledEnd = (args.scheduled_end as string | undefined)?.trim();
-  const arrivalWindowRaw = args.arrival_window;
-  const arrivalWindow =
-    typeof arrivalWindowRaw === 'number'
-      ? arrivalWindowRaw
-      : typeof arrivalWindowRaw === 'string' && arrivalWindowRaw.trim()
-        ? Number(arrivalWindowRaw)
-        : undefined;
+  const notes = resolveNotes(args);
 
-  const lineItems = resolveLineItems(args);
+  // Attribute the job to the HCP lead source behind the dialed tracking line.
+  const lead = await resolveLeadSource(session.toNumber).catch(() => null);
+  const leadSource = lead?.leadName ?? lead?.leadSourceId ?? 'Clara';
 
+  // Unscheduled "new job": no `schedule`, no `line_items` — the issue + requested
+  // window are in `notes`. HCP returns work_status "new job".
   const body: HcpCreateJobInput = {
     customer_id: customerId,
     address_id: addressId,
-    line_items: lineItems,
-    ...(scheduledStart
-      ? {
-          schedule: {
-            scheduled_start: scheduledStart,
-            ...(scheduledEnd ? { scheduled_end: scheduledEnd } : {}),
-            ...(arrivalWindow && Number.isFinite(arrivalWindow) ? { arrival_window: arrivalWindow } : {}),
-          },
-        }
-      : {}),
-    lead_source: 'Clara',
+    notes,
+    lead_source: leadSource,
   };
+
+  // The caller's requested window is kept for our own records only (not sent to HCP).
+  const requestedStart = (args.scheduled_start as string | undefined)?.trim() || null;
+  const requestedEnd = (args.scheduled_end as string | undefined)?.trim() || null;
 
   try {
     const job = await createJob(ctx, body);
     const jobNumber = (job.invoice_number as string | null) ?? null;
+    const workStatus = (job.work_status as string | null) ?? 'new job';
 
     await insertJob(session.tenantId, {
       housecallproJobId: job.id,
       housecallproCustomerId: customerId,
       addressId,
       sessionId: session.sessionId,
-      scheduledStart: scheduledStart ?? null,
-      scheduledEnd: scheduledEnd ?? null,
-      arrivalWindow: arrivalWindow && Number.isFinite(arrivalWindow) ? arrivalWindow : null,
-      lineItems,
+      scheduledStart: requestedStart,
+      scheduledEnd: requestedEnd,
+      arrivalWindow: null,
+      lineItems: null,
     });
 
     await setJobCreated(session.sessionId, job.id, jobNumber);
-    if (scheduledStart) {
+    if (requestedStart) {
       await setSelectedSlot(session.sessionId, {
-        start: scheduledStart,
-        end: scheduledEnd ?? null,
+        start: requestedStart,
+        end: requestedEnd,
         display: (args.slot_display as string | undefined)?.trim() || null,
       }).catch(() => undefined);
     }
@@ -117,21 +129,27 @@ export async function handleBookJob(
         customerName: session.customerName ?? customer?.name ?? null,
         callbackNumber: session.caller,
         address: session.serviceAddressMap?.addresses?.[addressId]?.formatted ?? null,
-        scheduledStart: scheduledStart ?? null,
-        scheduledEnd: scheduledEnd ?? null,
+        scheduledStart: requestedStart,
+        scheduledEnd: requestedEnd,
         jobNumber,
         jobId: job.id,
       },
     }).catch(() => undefined);
 
-    console.log('[hcp] book_job created', { sessionId: session.sessionId, jobId: job.id, jobNumber });
+    console.log('[hcp] book_job created', {
+      sessionId: session.sessionId,
+      jobId: job.id,
+      jobNumber,
+      workStatus,
+      leadSource,
+    });
     return {
       result: JSON.stringify({
         status: 'created',
         job_id: job.id,
         invoice_number: jobNumber,
-        scheduled_start: scheduledStart ?? null,
-        scheduled_end: scheduledEnd ?? null,
+        work_status: workStatus,
+        scheduled: false,
       }),
     };
   } catch (err) {
