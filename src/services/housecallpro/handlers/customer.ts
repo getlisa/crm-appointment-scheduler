@@ -94,6 +94,7 @@ export async function handleCreateCustomer(
         status: 'created',
         customer_id: created.id,
         customer_name: name,
+        first_name: created.first_name ?? firstName,
       }),
     };
   } catch (err) {

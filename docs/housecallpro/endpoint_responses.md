@@ -9,6 +9,15 @@ HouseCall Pro (HCP) auth is a **static per-tenant API key** stored in `housecall
 
 **Booking model:** the **Office-Hours** agent identifies → (creates) the customer → matches/creates the service address → books the job into `housecallpro_jobs`. The **After-Hours** agent identifies → captures the request via `escalate` (no booking).
 
+> **Identification (current):** the tenant number is fronted by a Twilio Function
+> (`registerPhoneCall`), so Retell does **not** fire `call_inbound`. The session is created at
+> `call_started` (caller = `from_number`, `lead_source_number` from
+> `call.retell_llm_dynamic_variables`), and the agent identifies the caller **during the
+> conversation** by calling `/fn/customer_lookup` (phone match) — not via `call_inbound` dynamic
+> variables. `book_job` resolves `customer_id`, `address_id`, and `lead_source` from the session
+> state set by the identify/address steps. Address matching allows **one retry** with the full
+> address (street number + street name + ZIP) before falling back to `create_address`.
+
 ---
 
 ## Step 1 — List tenants + sync status (verify setup)
