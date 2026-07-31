@@ -28,6 +28,7 @@ import { normalizePhoneLast10 } from '../services/housecallpro/fuzzy-search.js';
 import { diversionNumberFrom } from '../services/housecallpro/sip.js';
 import { listCustomers } from '../services/housecallpro/client.js';
 import { handleLookupFuzzy } from '../services/housecallpro/handlers/fuzzy-lookup.js';
+import { handleCustomerLookup } from '../services/housecallpro/handlers/customer-lookup.js';
 import {
   handleConfirmCustomer,
   handleCreateCustomer,
@@ -62,15 +63,88 @@ function logHcpException(context: string, error: unknown): void {
   console.error(context, String(error));
 }
 
-async function resolveSession(callId: string | undefined, fromNumber?: string, toNumber?: string) {
-  let session = callId ? await getByRetellCallId(callId) : null;
-  console.log('[hcp] resolveSession direct lookup', { callId, found: !!session });
+/** The subset of a Retell `call` object we read for lead-source attribution. */
+type CallLike = {
+  retell_llm_dynamic_variables?: Record<string, unknown>;
+  custom_sip_headers?: Record<string, unknown>;
+};
 
-  if (!session && fromNumber && toNumber) {
-    const token = await resolveByInboundNumber(toNumber);
-    if (token) session = await findActiveByCallerAndTenant(token.tenantId, fromNumber);
-    console.log('[hcp] resolveSession fallback lookup', { fromNumber, toNumber, tenantId: token?.tenantId, found: !!session });
+/**
+ * Extracts the lead-source tracking line from a Retell `call` object.
+ *
+ * In the Twilio-Function (registerPhoneCall) path the number is set directly as
+ * the `lead_source_number` dynamic variable (a clean E.164), so read that first.
+ * Fall back to the SIP `Diversion` header for any direct-inbound-webhook call.
+ */
+function leadSourceNumberFromCall(call: CallLike | undefined): string | null {
+  const dv = call?.retell_llm_dynamic_variables;
+  const direct = (dv?.lead_source_number as string | undefined)?.trim();
+  if (direct) return direct;
+  return diversionNumberFrom(dv) ?? diversionNumberFrom(call?.custom_sip_headers);
+}
+
+/**
+ * Get-or-create the call session for a call. Idempotent, so it works whether the
+ * session already exists (legacy direct/inbound-webhook path) or not (Twilio-Function
+ * path, where `call_inbound` never fires and the session must be created at
+ * `call_started` / first `/fn/*` call). Returns null only if the tenant can't be
+ * resolved from `toNumber`.
+ */
+async function ensureCallSession(params: {
+  callId?: string;
+  fromNumber?: string;
+  toNumber?: string;
+  leadSourceNumber?: string | null;
+}) {
+  let session = params.callId ? await getByRetellCallId(params.callId) : null;
+
+  if (!session && params.fromNumber && params.toNumber) {
+    const token = await resolveByInboundNumber(params.toNumber);
+    if (token) session = await findActiveByCallerAndTenant(token.tenantId, params.fromNumber);
   }
+
+  if (session) {
+    if (params.callId && session.retellCallId !== params.callId) {
+      await setRetellCallId(session.sessionId, params.callId);
+    }
+    if (!session.leadSourceNumber && params.leadSourceNumber) {
+      await setLeadSourceNumber(session.sessionId, params.leadSourceNumber);
+    }
+    return session;
+  }
+
+  if (!params.toNumber) return null;
+  const token = await resolveByInboundNumber(params.toNumber);
+  if (!token) return null;
+
+  return createCallSession({
+    tenantId: token.tenantId,
+    caller: params.fromNumber ?? '',
+    toNumber: params.toNumber,
+    leadSourceNumber: params.leadSourceNumber ?? null,
+    retellCallId: params.callId ?? null,
+  });
+}
+
+async function resolveSession(
+  callId: string | undefined,
+  fromNumber?: string,
+  toNumber?: string,
+  call?: CallLike,
+) {
+  // Create-if-missing: with the Twilio-Function path there is no call_inbound, so
+  // the session may not exist yet when the first /fn/* call arrives. This is the
+  // safety net; call_started normally creates it first.
+  const session = await ensureCallSession({
+    callId,
+    fromNumber,
+    toNumber,
+    leadSourceNumber: leadSourceNumberFromCall(call),
+  }).catch((err) => {
+    console.error('[hcp] resolveSession ensureCallSession', err);
+    return null;
+  });
+  console.log('[hcp] resolveSession', { callId, fromNumber, toNumber, found: !!session });
 
   if (!session) {
     console.warn('[hcp] resolveSession failed', { callId, fromNumber, toNumber });
@@ -271,36 +345,23 @@ router.post('/retell/webhook', async (req, res) => {
     const event = body?.event ?? '';
 
     if (event === 'call_started') {
-      // TEMP (remove after verifying diversion payload shape — see plan Step 0):
+      // TEMP (remove after verifying the payload shape): full body for debugging.
       console.log('[hcp] RAW call_started', JSON.stringify(req.body));
       const callId = body.call?.call_id ?? '';
       const toNumber = body.call?.to_number ?? '';
       const fromNumber = body.call?.from_number ?? '';
-      console.log('[hcp] call_started req', { callId, fromNumber, toNumber });
-      if (callId && fromNumber && toNumber) {
-        const token = await resolveByInboundNumber(toNumber);
-        if (token) {
-          const session = await findActiveByCallerAndTenant(token.tenantId, fromNumber);
-          if (session) {
-            if (session.retellCallId !== callId) {
-              await setRetellCallId(session.sessionId, callId);
-            }
-            // The SIP Diversion header (the real HCP tracking line) is reliably
-            // present as a dynamic variable by call_started. Backfill it onto the
-            // session for lead-source attribution if call_inbound didn't capture it.
-            if (!session.leadSourceNumber) {
-              const leadSourceNumber =
-                diversionNumberFrom(body.call?.retell_llm_dynamic_variables) ??
-                diversionNumberFrom(body.call?.custom_sip_headers);
-              if (leadSourceNumber) {
-                console.log('[hcp] call_started captured lead_source_number', { callId, leadSourceNumber });
-                await setLeadSourceNumber(session.sessionId, leadSourceNumber);
-              }
-            }
-          }
-        }
-      }
-      console.log('[hcp] call_started resp', { ok: true });
+      const leadSourceNumber = leadSourceNumberFromCall(body.call);
+      console.log('[hcp] call_started req', { callId, fromNumber, toNumber, leadSourceNumber });
+
+      // The Twilio-Function path pre-registers the call, so call_inbound never fires.
+      // Create (or hydrate) the session here so /fn/* calls can resolve it and the
+      // lead-source tracking line is captured for attribution.
+      const session = await ensureCallSession({ callId, fromNumber, toNumber, leadSourceNumber })
+        .catch((err) => {
+          console.error('[hcp] call_started ensureCallSession', err);
+          return null;
+        });
+      console.log('[hcp] call_started resp', { ok: true, sessionId: session?.sessionId ?? null });
       res.json({ ok: true });
       return;
     }
@@ -453,7 +514,7 @@ function fnRoute(
       const args = normalizedHcpPayload(req);
       console.log(`[hcp] fn/${name} req`, { callId, fromNumber, toNumber, args });
 
-      const resolved = await resolveSession(callId, fromNumber, toNumber);
+      const resolved = await resolveSession(callId, fromNumber, toNumber, call as CallLike | undefined);
       if (!resolved) {
         console.log(`[hcp] fn/${name} resp`, { result: 'error: session not found' });
         res.json({ result: 'error: session not found' });
@@ -469,6 +530,7 @@ function fnRoute(
   };
 }
 
+router.post('/fn/customer_lookup', fnRoute('customer_lookup', ({ session }) => handleCustomerLookup(session)));
 router.post('/fn/lookup_customer_fuzzy', fnRoute('lookup_customer_fuzzy', ({ session }, args) => handleLookupFuzzy(session, args)));
 router.post('/fn/confirm_customer', fnRoute('confirm_customer', ({ session }, args) => handleConfirmCustomer(session, args)));
 router.post('/fn/create_customer', fnRoute('create_customer', ({ session, ctx }, args) => handleCreateCustomer(session, ctx, args)));
