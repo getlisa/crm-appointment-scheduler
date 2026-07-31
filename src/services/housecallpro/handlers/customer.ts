@@ -68,7 +68,7 @@ export async function handleCreateCustomer(
     month: 'long',
     day: 'numeric',
   });
-  const lead = await resolveLeadSource(session.toNumber).catch(() => null);
+  const lead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
   const leadSource = lead?.leadName ?? lead?.leadSourceId ?? 'Clara';
 
   try {

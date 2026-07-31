@@ -19,11 +19,13 @@ import {
   getByRetellCallId,
   findActiveByCallerAndTenant,
   setRetellCallId,
+  setLeadSourceNumber,
   setMatchedCustomer,
   setStatus,
 } from '../services/housecallpro/db/callsessions.js';
 import { findCustomersByPhone, buildCustomerRow } from '../services/housecallpro/db/customers.js';
 import { normalizePhoneLast10 } from '../services/housecallpro/fuzzy-search.js';
+import { diversionNumberFrom } from '../services/housecallpro/sip.js';
 import { listCustomers } from '../services/housecallpro/client.js';
 import { handleLookupFuzzy } from '../services/housecallpro/handlers/fuzzy-lookup.js';
 import {
@@ -240,12 +242,26 @@ router.post('/retell/webhook', async (req, res) => {
   try {
     const body = req.body as {
       event?: string;
-      call?: { call_id?: string; to_number?: string; from_number?: string; disconnection_reason?: string };
-      call_inbound?: { from_number?: string; to_number?: string; agent_id?: string };
+      call?: {
+        call_id?: string;
+        to_number?: string;
+        from_number?: string;
+        disconnection_reason?: string;
+        custom_sip_headers?: Record<string, unknown>;
+        retell_llm_dynamic_variables?: Record<string, unknown>;
+      };
+      call_inbound?: {
+        from_number?: string;
+        to_number?: string;
+        agent_id?: string;
+        custom_sip_headers?: Record<string, unknown>;
+      };
     };
     const event = body?.event ?? '';
 
     if (event === 'call_started') {
+      // TEMP (remove after verifying diversion payload shape — see plan Step 0):
+      console.log('[hcp] RAW call_started', JSON.stringify(req.body));
       const callId = body.call?.call_id ?? '';
       const toNumber = body.call?.to_number ?? '';
       const fromNumber = body.call?.from_number ?? '';
@@ -253,8 +269,22 @@ router.post('/retell/webhook', async (req, res) => {
         const token = await resolveByInboundNumber(toNumber);
         if (token) {
           const session = await findActiveByCallerAndTenant(token.tenantId, fromNumber);
-          if (session && session.retellCallId !== callId) {
-            await setRetellCallId(session.sessionId, callId);
+          if (session) {
+            if (session.retellCallId !== callId) {
+              await setRetellCallId(session.sessionId, callId);
+            }
+            // The SIP Diversion header (the real HCP tracking line) is reliably
+            // present as a dynamic variable by call_started. Backfill it onto the
+            // session for lead-source attribution if call_inbound didn't capture it.
+            if (!session.leadSourceNumber) {
+              const leadSourceNumber =
+                diversionNumberFrom(body.call?.retell_llm_dynamic_variables) ??
+                diversionNumberFrom(body.call?.custom_sip_headers);
+              if (leadSourceNumber) {
+                console.log('[hcp] call_started captured lead_source_number', { callId, leadSourceNumber });
+                await setLeadSourceNumber(session.sessionId, leadSourceNumber);
+              }
+            }
           }
         }
       }
@@ -263,15 +293,27 @@ router.post('/retell/webhook', async (req, res) => {
     }
 
     if (event === 'call_inbound') {
+      // TEMP (remove after verifying diversion payload shape — see plan Step 0):
+      console.log('[hcp] RAW call_inbound', JSON.stringify(req.body));
       const toNumber = body.call_inbound?.to_number ?? '';
       const fromNumber = body.call_inbound?.from_number ?? '';
       const callId = body.call?.call_id;
-      console.log('[hcp] call_inbound', { callId, fromNumber, toNumber });
+
+      // The dialed HCP tracking line (the lead source) rides in the SIP Diversion
+      // header, not to_number (which is the shared DID). Parse it if present; the
+      // call_started handler backfills it if it's not available yet here.
+      const leadSourceNumber =
+        diversionNumberFrom(body.call_inbound?.custom_sip_headers) ??
+        diversionNumberFrom(body.call?.custom_sip_headers) ??
+        diversionNumberFrom(body.call?.retell_llm_dynamic_variables);
+      // The value surfaced to the agent + used for attribution downstream.
+      const resolvedLeadSourceNumber = leadSourceNumber ?? toNumber;
+      console.log('[hcp] call_inbound', { callId, fromNumber, toNumber, leadSourceNumber });
 
       const token = await resolveByInboundNumber(toNumber);
       if (!token) {
         console.error(`[hcp] unknown inbound number: ${toNumber}`);
-        res.json(buildInboundResponse('error', fromNumber, null, false, toNumber));
+        res.json(buildInboundResponse('error', fromNumber, null, false, resolvedLeadSourceNumber));
         return;
       }
 
@@ -279,6 +321,7 @@ router.post('/retell/webhook', async (req, res) => {
         tenantId: token.tenantId,
         caller: fromNumber,
         toNumber,
+        leadSourceNumber,
         retellCallId: callId ?? null,
       });
 
@@ -287,7 +330,7 @@ router.post('/retell/webhook', async (req, res) => {
       console.log('[hcp] phone lookup', { phoneLast10, matchCount: matches.length });
 
       if (matches.length === 0) {
-        res.json(buildInboundResponse('not_found', fromNumber, token.agentId, true, toNumber));
+        res.json(buildInboundResponse('not_found', fromNumber, token.agentId, true, resolvedLeadSourceNumber));
         return;
       }
 
@@ -305,7 +348,7 @@ router.post('/retell/webhook', async (req, res) => {
               caller_name: customer.firstName ?? customer.name,
               first_name: customer.firstName ?? '',
               last_name: customer.lastName ?? '',
-              lead_source_number: toNumber,
+              lead_source_number: resolvedLeadSourceNumber,
               from_number: fromNumber,
               new_number_detected: 'false',
               multiple_matches: 'false',
@@ -329,7 +372,7 @@ router.post('/retell/webhook', async (req, res) => {
             caller_name: '',
             first_name: '',
             last_name: '',
-            lead_source_number: toNumber,
+            lead_source_number: resolvedLeadSourceNumber,
             from_number: fromNumber,
             new_number_detected: 'false',
             multiple_matches: 'true',
