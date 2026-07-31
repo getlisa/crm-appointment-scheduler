@@ -64,10 +64,12 @@ function logHcpException(context: string, error: unknown): void {
 
 async function resolveSession(callId: string | undefined, fromNumber?: string, toNumber?: string) {
   let session = callId ? await getByRetellCallId(callId) : null;
+  console.log('[hcp] resolveSession direct lookup', { callId, found: !!session });
 
   if (!session && fromNumber && toNumber) {
     const token = await resolveByInboundNumber(toNumber);
     if (token) session = await findActiveByCallerAndTenant(token.tenantId, fromNumber);
+    console.log('[hcp] resolveSession fallback lookup', { fromNumber, toNumber, tenantId: token?.tenantId, found: !!session });
   }
 
   if (!session) {
@@ -76,7 +78,10 @@ async function resolveSession(callId: string | undefined, fromNumber?: string, t
   }
 
   const token = await resolveByTenantId(session.tenantId);
-  if (!token) return null;
+  if (!token) {
+    console.warn('[hcp] resolveSession token missing', { sessionId: session.sessionId, tenantId: session.tenantId });
+    return null;
+  }
 
   const ctx: HcpContext = {
     apiKey: token.apiKey,
@@ -84,6 +89,12 @@ async function resolveSession(callId: string | undefined, fromNumber?: string, t
     emailTo: token.emailTo,
     ccMail: token.ccMail,
   };
+  console.log('[hcp] resolveSession ok', {
+    sessionId: session.sessionId,
+    retellCallId: session.retellCallId,
+    tenantId: session.tenantId,
+    matchedCustomerId: session.housecallproCustomerId,
+  });
   return { session, ctx };
 }
 
@@ -265,6 +276,7 @@ router.post('/retell/webhook', async (req, res) => {
       const callId = body.call?.call_id ?? '';
       const toNumber = body.call?.to_number ?? '';
       const fromNumber = body.call?.from_number ?? '';
+      console.log('[hcp] call_started req', { callId, fromNumber, toNumber });
       if (callId && fromNumber && toNumber) {
         const token = await resolveByInboundNumber(toNumber);
         if (token) {
@@ -288,6 +300,7 @@ router.post('/retell/webhook', async (req, res) => {
           }
         }
       }
+      console.log('[hcp] call_started resp', { ok: true });
       res.json({ ok: true });
       return;
     }
@@ -308,12 +321,14 @@ router.post('/retell/webhook', async (req, res) => {
         diversionNumberFrom(body.call?.retell_llm_dynamic_variables);
       // The value surfaced to the agent + used for attribution downstream.
       const resolvedLeadSourceNumber = leadSourceNumber ?? toNumber;
-      console.log('[hcp] call_inbound', { callId, fromNumber, toNumber, leadSourceNumber });
+      console.log('[hcp] call_inbound req', { callId, fromNumber, toNumber, leadSourceNumber });
 
       const token = await resolveByInboundNumber(toNumber);
       if (!token) {
         console.error(`[hcp] unknown inbound number: ${toNumber}`);
-        res.json(buildInboundResponse('error', fromNumber, null, false, resolvedLeadSourceNumber));
+        const errorResp = buildInboundResponse('error', fromNumber, null, false, resolvedLeadSourceNumber);
+        console.log('[hcp] call_inbound resp', errorResp);
+        res.json(errorResp);
         return;
       }
 
@@ -330,14 +345,16 @@ router.post('/retell/webhook', async (req, res) => {
       console.log('[hcp] phone lookup', { phoneLast10, matchCount: matches.length });
 
       if (matches.length === 0) {
-        res.json(buildInboundResponse('not_found', fromNumber, token.agentId, true, resolvedLeadSourceNumber));
+        const notFoundResp = buildInboundResponse('not_found', fromNumber, token.agentId, true, resolvedLeadSourceNumber);
+        console.log('[hcp] call_inbound resp', notFoundResp);
+        res.json(notFoundResp);
         return;
       }
 
       if (matches.length === 1) {
         const customer = matches[0];
         await setMatchedCustomer(session.sessionId, customer.housecallproCustomerId, customer.name, 'phone');
-        res.json({
+        const foundResp = {
           call_inbound: {
             override_agent_id: token.agentId ?? undefined,
             dynamic_variables: {
@@ -356,12 +373,14 @@ router.post('/retell/webhook', async (req, res) => {
               candidates: '[]',
             },
           },
-        });
+        };
+        console.log('[hcp] call_inbound resp', foundResp);
+        res.json(foundResp);
         return;
       }
 
       // 2+ matches — let the agent disambiguate
-      res.json({
+      const multiResp = {
         call_inbound: {
           override_agent_id: token.agentId ?? undefined,
           dynamic_variables: {
@@ -382,7 +401,9 @@ router.post('/retell/webhook', async (req, res) => {
             ),
           },
         },
-      });
+      };
+      console.log('[hcp] call_inbound resp', multiResp);
+      res.json(multiResp);
       return;
     }
 
@@ -392,6 +413,7 @@ router.post('/retell/webhook', async (req, res) => {
       const toNumber = body.call?.to_number ?? '';
       const disconnectionReason = body.call?.disconnection_reason;
       const newStatus = (disconnectionReason ?? 'ended') as HcpCallStatus;
+      console.log('[hcp] call_ended req', { callId, fromNumber, toNumber, disconnectionReason, newStatus });
 
       let session = callId ? await getByRetellCallId(callId) : null;
       if (!session && fromNumber && toNumber) {
@@ -399,6 +421,7 @@ router.post('/retell/webhook', async (req, res) => {
         if (token) session = await findActiveByCallerAndTenant(token.tenantId, fromNumber);
       }
       if (session) await setStatus(session.sessionId, newStatus).catch(() => undefined);
+      console.log('[hcp] call_ended resp', { ok: true, sessionFound: !!session });
       res.json({ ok: true });
       return;
     }
@@ -428,9 +451,11 @@ function fnRoute(
       const fromNumber = call?.from_number as string | undefined;
       const toNumber = call?.to_number as string | undefined;
       const args = normalizedHcpPayload(req);
+      console.log(`[hcp] fn/${name} req`, { callId, fromNumber, toNumber, args });
 
       const resolved = await resolveSession(callId, fromNumber, toNumber);
       if (!resolved) {
+        console.log(`[hcp] fn/${name} resp`, { result: 'error: session not found' });
         res.json({ result: 'error: session not found' });
         return;
       }
