@@ -158,18 +158,19 @@ The new `address_id` becomes the session's selected address, so `book_job` can o
 
 ## Step 3f — Book job
 
-Office-Hours only. Creates the job in HCP (`POST /jobs`) as an **unscheduled "new job"** — no `schedule` and no `line_items` are sent, so it lands in the office's New pipeline for them to schedule. `service_name` describes the issue; `scheduled_start`/`scheduled_end` are optional and only capture the caller's *requested* window (recorded in the job `notes` as free text — not a booked time). `address_id` is optional — the selected address from match/create is used if omitted.
+Office-Hours only. Creates the job in HCP (`POST /jobs`) as an **unscheduled "new job"** — no `schedule` and no `line_items` are sent, so it lands in the office's New pipeline for them to schedule. `service_type` is the canonical classification (see [zephyr-service-catalog.md](./zephyr-service-catalog.md)); `issue` is the caller's complete account in their own words; `scheduled_start`/`scheduled_end` are optional and only capture the caller's *requested* window (recorded in the job `notes` as free text — not a booked time). `address_id` is optional — the selected address from match/create is used if omitted. (`service_name` is still accepted as a legacy alias for `issue`.)
 
-The job's `lead_source` is resolved from the dialed tracking line (`to_number` / `lead_source_number`) via `housecallpro_lead_sources`, falling back to `Clara` when no mapping exists. The request writes `housecallpro_jobs` (the requested window is kept there for our records only).
+The job's `lead_source` is resolved from the dialed tracking line (`lead_source_number` ?? `to_number`) via `housecallpro_lead_sources`, falling back to `Clara` when no mapping exists. The request writes `housecallpro_jobs` (the requested window is kept there for our records only).
 
 The job `notes` sent to HCP look like:
 ```
-Issue Description :- AC not cooling
-Job between 2026-07-24T14:00:00 to 2026-07-24T16:00:00
+Service :- AC Repair
+Issue Description :- Not cooling — blowing warm air, upstairs won't cool, started ~2 days ago, rattling noise from the outdoor unit
+Job scheduled for August 7, 2026, between 1:00 PM and 5:00 PM
 ```
 
 ```
-curl -X POST http://localhost:8080/api/housecallpro/fn/book_job -H "Content-Type: application/json" -d "{\"call\": {\"call_id\": \"call_abc123\"}, \"args\": {\"service_name\": \"AC not cooling\", \"scheduled_start\": \"2026-07-24T14:00:00\", \"scheduled_end\": \"2026-07-24T16:00:00\"}}"
+curl -X POST http://localhost:8080/api/housecallpro/fn/book_job -H "Content-Type: application/json" -d "{\"call\": {\"call_id\": \"call_abc123\"}, \"args\": {\"service_type\": \"AC Repair\", \"issue\": \"Not cooling, blowing warm air, upstairs won't cool, started 2 days ago\", \"scheduled_start\": \"2026-08-07T13:00:00\", \"scheduled_end\": \"2026-08-07T17:00:00\"}}"
 ```
 
 **Expected response** (no scheduled times; `work_status` is HCP's new-job status, `scheduled:false`)
