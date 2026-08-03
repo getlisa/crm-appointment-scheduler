@@ -70,8 +70,9 @@ export async function sendHcpNotification({
     : [
         ['Caller', details.customerName || '—'],
         ['Callback Number', details.callbackNumber || 'Not provided'],
+        ...((details.address ? [['Service Address', details.address]] : []) as [string, string][]),
         ['Type', details.escalationType || 'General'],
-        ['Summary', details.summary || 'Not provided'],
+        ['Notes', details.notes || details.summary || 'Not provided'],
       ];
 
   const text = rows.map(([k, v]) => `${k}: ${v}`).join('\n');
