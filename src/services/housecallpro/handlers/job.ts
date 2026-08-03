@@ -36,11 +36,23 @@ const MONTHS = [
  * timezone) into a friendly date plus its hour/minute — e.g.
  * { date: "August 4, 2026", hour: 9, minute: 0 }. No timezone conversion.
  */
+/**
+ * Parses a local time string into a friendly date plus its hour (0-23) and minute.
+ * Accepts 24-hour ISO ("2026-08-04T14:00:00") and tolerates a single-digit hour
+ * and an explicit AM/PM suffix ("2026-08-04T2:00 PM" → hour 14). No tz conversion.
+ */
 function formatLocalDate(iso?: string | null): { date: string; hour: number; minute: number } | null {
-  const m = iso?.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  const m = iso?.trim().match(/^(\d{4})-(\d{2})-(\d{2})[T ]\s*(\d{1,2}):(\d{2})(?::\d{2})?\s*(am|pm)?/i);
   if (!m) return null;
-  const [, y, mo, d, hh, mi] = m;
-  return { date: `${MONTHS[Number(mo) - 1]} ${Number(d)}, ${y}`, hour: Number(hh), minute: Number(mi) };
+  const [, y, mo, d, hh, mi, ap] = m;
+  let hour = Number(hh);
+  if (ap) {
+    const isPm = ap.toLowerCase() === 'pm';
+    if (isPm && hour < 12) hour += 12; // 2 PM → 14
+    if (!isPm && hour === 12) hour = 0; // 12 AM → 0
+  }
+  if (hour > 23) hour %= 24;
+  return { date: `${MONTHS[Number(mo) - 1]} ${Number(d)}, ${y}`, hour, minute: Number(mi) };
 }
 
 /** Coarse part of day, so notes/emails never imply a specific booked time. */
@@ -50,18 +62,31 @@ function partOfDay(hour: number): 'morning' | 'afternoon' | 'evening' {
   return 'evening';
 }
 
+/** A part-of-day word if the text explicitly says one (wins over a parsed hour). */
+function partOfDayFromText(text?: string | null): 'morning' | 'afternoon' | 'evening' | null {
+  const t = (text ?? '').toLowerCase();
+  if (/\bmorning\b/.test(t)) return 'morning';
+  if (/\bafternoon\b/.test(t)) return 'afternoon';
+  if (/\b(evening|tonight|night)\b/.test(t)) return 'evening';
+  return null;
+}
+
 /**
  * The caller's requested time for the office as a non-committal date + coarse part
  * of day only — never a specific time or window, so nothing implies a booked slot.
- * e.g. "Job logged for August 4, 2026 in the morning".
+ * e.g. "Job logged for August 4, 2026 in the morning". Handles 24-hour and AM/PM
+ * times; an explicit "morning/afternoon/evening" word wins over the parsed hour.
  */
 function resolveWindowText(args: Record<string, unknown>): string | null {
-  const d = formatLocalDate((args.scheduled_start as string | undefined)?.trim());
+  const startRaw = (args.scheduled_start as string | undefined)?.trim();
+  const display = (args.slot_display as string | undefined)?.trim();
+  const d = formatLocalDate(startRaw);
   if (d) {
+    const worded = partOfDayFromText(startRaw) ?? partOfDayFromText(display);
+    if (worded) return `Job logged for ${d.date} in the ${worded}`;
     if (d.hour === 0 && d.minute === 0) return `Job logged for ${d.date}`;
     return `Job logged for ${d.date} in the ${partOfDay(d.hour)}`;
   }
-  const display = (args.slot_display as string | undefined)?.trim();
   return display ? `Job logged for ${display}` : null;
 }
 
