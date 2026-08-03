@@ -150,6 +150,7 @@ The `housecallpro_cron` Supabase Edge Function keeps `housecallpro_customers` in
 | Doc | Contents |
 |---|---|
 | [docs/housecallpro/housecallpro.md](docs/housecallpro/housecallpro.md) | **Start here** — integration overview: architecture, call flow, session state, functions, tables, and gotchas |
+| [docs/housecallpro/zephyr-service-catalog.md](docs/housecallpro/zephyr-service-catalog.md) | Zephyr service taxonomy the Office-Hours agent classifies against (the 9 bookable services, symptom triage, intent routing) |
 | [docs/housecallpro/endpoint_responses.md](docs/housecallpro/endpoint_responses.md) | Every endpoint's request/response, admin sync, gotchas |
 | [docs/housecallpro/lead-source-attribution.md](docs/housecallpro/lead-source-attribution.md) | Twilio-Function/`registerPhoneCall` flow, why `call_inbound` never fires, the `call_started` payload, `customer_lookup` identification, and the HCP "lead source must exist" rule |
 

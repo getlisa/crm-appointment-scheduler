@@ -18,6 +18,13 @@ export async function handleEscalate(
     || (args.message as string | undefined)?.trim()
     || '';
   const callerName = (args.caller_name as string | undefined)?.trim() || session.customerName || null;
+  const address =
+    (args.address as string | undefined)?.trim() ||
+    (args.service_address as string | undefined)?.trim() ||
+    session.serviceAddressMap?.addresses?.[session.serviceAddressMap?.selectedAddressId ?? '']?.formatted ||
+    null;
+  // Same structured notes block as the Office-Hours booking email.
+  const notes = summary ? `Issue Description :- ${summary}` : null;
 
   await setEscalation(session.sessionId, escalationType, summary);
 
@@ -28,8 +35,10 @@ export async function handleEscalate(
     details: {
       customerName: callerName,
       callbackNumber: (args.callback_number as string | undefined)?.trim() || session.caller,
+      address,
       escalationType,
       summary,
+      notes,
     },
   }).catch(() => undefined);
 

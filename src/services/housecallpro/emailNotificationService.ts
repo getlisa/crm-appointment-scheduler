@@ -18,6 +18,8 @@ export interface HcpNotificationDetails {
   address?: string | null;
   scheduledStart?: string | null;
   scheduledEnd?: string | null;
+  /** The exact job notes sent to HCP (Service / Issue Description / schedule). */
+  notes?: string | null;
   jobNumber?: string | null;
   jobId?: string | null;
   escalationType?: string | null;
@@ -62,14 +64,15 @@ export async function sendHcpNotification({
         ['Customer', details.customerName || '—'],
         ['Callback Number', details.callbackNumber || 'Not provided'],
         ['Service Address', details.address || 'Not provided'],
-        ['Requested availability', [details.scheduledStart, details.scheduledEnd].filter(Boolean).join(' → ') || 'None given'],
+        ['Notes', details.notes || 'None'],
         ['Job Number', details.jobNumber || '—'],
       ]
     : [
         ['Caller', details.customerName || '—'],
         ['Callback Number', details.callbackNumber || 'Not provided'],
+        ...((details.address ? [['Service Address', details.address]] : []) as [string, string][]),
         ['Type', details.escalationType || 'General'],
-        ['Summary', details.summary || 'Not provided'],
+        ['Notes', details.notes || details.summary || 'Not provided'],
       ];
 
   const text = rows.map(([k, v]) => `${k}: ${v}`).join('\n');
@@ -106,13 +109,21 @@ export async function sendHcpNotification({
   }
 }
 
+/** Escapes HTML so free-text values (e.g. the caller's issue) can't break markup. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function composeHtml(badge: string, badgeColor: string, rows: [string, string][]): string {
   const rowsHtml = rows
     .map(
       ([label, value]) => `
     <tr>
-      <td style="padding:6px 12px;color:#555;font-size:13px;width:160px;vertical-align:top">${label}</td>
-      <td style="padding:6px 12px;color:#111;font-size:13px;font-family:monospace">${value ?? '—'}</td>
+      <td style="padding:6px 12px;color:#555;font-size:13px;width:160px;vertical-align:top">${escapeHtml(label)}</td>
+      <td style="padding:6px 12px;color:#111;font-size:13px;font-family:monospace;white-space:pre-wrap">${escapeHtml(value ?? '—').replace(/\n/g, '<br>')}</td>
     </tr>`,
     )
     .join('');

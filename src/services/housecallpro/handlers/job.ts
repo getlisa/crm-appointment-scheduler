@@ -26,34 +26,62 @@ import type {
   RetellFunctionResult,
 } from '../types.js';
 
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+/**
+ * Formats a local ISO wall time ("2026-08-07T13:00:00", already in the tenant's
+ * timezone) into a friendly date + 12-hour time — e.g. { date: "August 7, 2026",
+ * time: "1:00 PM" }. Parses the literal components (no timezone conversion).
+ */
+function formatLocalDateTime(iso?: string | null): { date: string; time: string } | null {
+  const m = iso?.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const [, y, mo, d, hh, mi] = m;
+  let hour = Number(hh);
+  const ampm = hour >= 12 ? 'PM' : 'AM';
+  hour = hour % 12 || 12;
+  return { date: `${MONTHS[Number(mo) - 1]} ${Number(d)}, ${y}`, time: `${hour}:${mi} ${ampm}` };
+}
+
 /** Human-readable text for the caller's requested time window, or null if none given. */
 function resolveWindowText(args: Record<string, unknown>): string | null {
+  const s = formatLocalDateTime((args.scheduled_start as string | undefined)?.trim());
+  const e = formatLocalDateTime((args.scheduled_end as string | undefined)?.trim());
+  if (s && e) return `Job scheduled for ${s.date}, between ${s.time} and ${e.time}`;
+  if (s) return `Job scheduled for ${s.date} at ${s.time}`;
   const display = (args.slot_display as string | undefined)?.trim();
-  if (display) return display;
-  const start = (args.scheduled_start as string | undefined)?.trim();
-  const end = (args.scheduled_end as string | undefined)?.trim();
-  if (start && end) return `${start} to ${end}`;
-  if (start) return start;
-  return null;
+  return display ? `Job scheduled for ${display}` : null;
 }
 
 /**
  * Builds the job notes for the office. HCP receives no line items or schedule,
- * so the issue and the requested window live here:
+ * so the classified service, the caller's full account, and the requested window
+ * live here:
  *
- *   Issue Description :- <issue>
- *   Job between <start> to <end>
+ *   Service :- <canonical service type>            (omitted if not classified)
+ *   Issue Description :- <caller's complete account>
+ *   Job scheduled for <date>, between <start> and <end>
+ *
+ * `issue` is the caller's own words (everything they said); `service_type` is the
+ * canonical classification. `service_name` is kept as a legacy fallback for the issue.
  */
 function resolveNotes(args: Record<string, unknown>): string {
+  const serviceType = (args.service_type as string | undefined)?.trim();
   const issue =
+    (args.issue as string | undefined)?.trim() ||
     (args.service_name as string | undefined)?.trim() ||
     (args.reason as string | undefined)?.trim() ||
     (args.job_type as string | undefined)?.trim() ||
     'Service request';
 
-  let notes = `Issue Description :- ${issue}`;
+  let notes = '';
+  if (serviceType) notes += `Service :- ${serviceType}\n`;
+  notes += `Issue Description :- ${issue}`;
   const window = resolveWindowText(args);
-  if (window) notes += `\nJob between ${window}`;
+  if (window) notes += `\n${window}`;
   return notes;
 }
 
@@ -131,8 +159,7 @@ export async function handleBookJob(
         customerName: session.customerName ?? customer?.name ?? null,
         callbackNumber: session.caller,
         address: session.serviceAddressMap?.addresses?.[addressId]?.formatted ?? null,
-        scheduledStart: requestedStart,
-        scheduledEnd: requestedEnd,
+        notes, // same Service / Issue Description / schedule block sent to HCP
         jobNumber,
         jobId: job.id,
       },
