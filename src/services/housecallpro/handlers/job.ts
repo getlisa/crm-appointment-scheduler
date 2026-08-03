@@ -159,8 +159,7 @@ export async function handleBookJob(
         customerName: session.customerName ?? customer?.name ?? null,
         callbackNumber: session.caller,
         address: session.serviceAddressMap?.addresses?.[addressId]?.formatted ?? null,
-        scheduledStart: requestedStart,
-        scheduledEnd: requestedEnd,
+        notes, // same Service / Issue Description / schedule block sent to HCP
         jobNumber,
         jobId: job.id,
       },
