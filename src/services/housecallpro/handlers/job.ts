@@ -32,28 +32,62 @@ const MONTHS = [
 ];
 
 /**
- * Formats a local ISO wall time ("2026-08-07T13:00:00", already in the tenant's
- * timezone) into a friendly date + 12-hour time — e.g. { date: "August 7, 2026",
- * time: "1:00 PM" }. Parses the literal components (no timezone conversion).
+ * Parses a local ISO wall time ("2026-08-04T09:00:00", already in the tenant's
+ * timezone) into a friendly date plus its hour/minute — e.g.
+ * { date: "August 4, 2026", hour: 9, minute: 0 }. No timezone conversion.
  */
-function formatLocalDateTime(iso?: string | null): { date: string; time: string } | null {
-  const m = iso?.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+/**
+ * Parses a local time string into a friendly date plus its hour (0-23) and minute.
+ * Accepts 24-hour ISO ("2026-08-04T14:00:00") and tolerates a single-digit hour
+ * and an explicit AM/PM suffix ("2026-08-04T2:00 PM" → hour 14). No tz conversion.
+ */
+function formatLocalDate(iso?: string | null): { date: string; hour: number; minute: number } | null {
+  const m = iso?.trim().match(/^(\d{4})-(\d{2})-(\d{2})[T ]\s*(\d{1,2}):(\d{2})(?::\d{2})?\s*(am|pm)?/i);
   if (!m) return null;
-  const [, y, mo, d, hh, mi] = m;
+  const [, y, mo, d, hh, mi, ap] = m;
   let hour = Number(hh);
-  const ampm = hour >= 12 ? 'PM' : 'AM';
-  hour = hour % 12 || 12;
-  return { date: `${MONTHS[Number(mo) - 1]} ${Number(d)}, ${y}`, time: `${hour}:${mi} ${ampm}` };
+  if (ap) {
+    const isPm = ap.toLowerCase() === 'pm';
+    if (isPm && hour < 12) hour += 12; // 2 PM → 14
+    if (!isPm && hour === 12) hour = 0; // 12 AM → 0
+  }
+  if (hour > 23) hour %= 24;
+  return { date: `${MONTHS[Number(mo) - 1]} ${Number(d)}, ${y}`, hour, minute: Number(mi) };
 }
 
-/** Human-readable text for the caller's requested time window, or null if none given. */
+/** Coarse part of day, so notes/emails never imply a specific booked time. */
+function partOfDay(hour: number): 'morning' | 'afternoon' | 'evening' {
+  if (hour < 12) return 'morning';
+  if (hour < 17) return 'afternoon';
+  return 'evening';
+}
+
+/** A part-of-day word if the text explicitly says one (wins over a parsed hour). */
+function partOfDayFromText(text?: string | null): 'morning' | 'afternoon' | 'evening' | null {
+  const t = (text ?? '').toLowerCase();
+  if (/\bmorning\b/.test(t)) return 'morning';
+  if (/\bafternoon\b/.test(t)) return 'afternoon';
+  if (/\b(evening|tonight|night)\b/.test(t)) return 'evening';
+  return null;
+}
+
+/**
+ * The caller's requested time for the office as a non-committal date + coarse part
+ * of day only — never a specific time or window, so nothing implies a booked slot.
+ * e.g. "Job logged for August 4, 2026 in the morning". Handles 24-hour and AM/PM
+ * times; an explicit "morning/afternoon/evening" word wins over the parsed hour.
+ */
 function resolveWindowText(args: Record<string, unknown>): string | null {
-  const s = formatLocalDateTime((args.scheduled_start as string | undefined)?.trim());
-  const e = formatLocalDateTime((args.scheduled_end as string | undefined)?.trim());
-  if (s && e) return `Job scheduled for ${s.date}, between ${s.time} and ${e.time}`;
-  if (s) return `Job scheduled for ${s.date} at ${s.time}`;
+  const startRaw = (args.scheduled_start as string | undefined)?.trim();
   const display = (args.slot_display as string | undefined)?.trim();
-  return display ? `Job scheduled for ${display}` : null;
+  const d = formatLocalDate(startRaw);
+  if (d) {
+    const worded = partOfDayFromText(startRaw) ?? partOfDayFromText(display);
+    if (worded) return `Job logged for ${d.date} in the ${worded}`;
+    if (d.hour === 0 && d.minute === 0) return `Job logged for ${d.date}`;
+    return `Job logged for ${d.date} in the ${partOfDay(d.hour)}`;
+  }
+  return display ? `Job logged for ${display}` : null;
 }
 
 /**
@@ -63,7 +97,7 @@ function resolveWindowText(args: Record<string, unknown>): string | null {
  *
  *   Service :- <canonical service type>            (omitted if not classified)
  *   Issue Description :- <caller's complete account>
- *   Job scheduled for <date>, between <start> and <end>
+ *   Job logged for <date> in the <morning/afternoon/evening>
  *
  * `issue` is the caller's own words (everything they said); `service_type` is the
  * canonical classification. `service_name` is kept as a legacy fallback for the issue.
