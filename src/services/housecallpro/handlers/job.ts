@@ -32,28 +32,37 @@ const MONTHS = [
 ];
 
 /**
- * Formats a local ISO wall time ("2026-08-07T13:00:00", already in the tenant's
- * timezone) into a friendly date + 12-hour time — e.g. { date: "August 7, 2026",
- * time: "1:00 PM" }. Parses the literal components (no timezone conversion).
+ * Parses a local ISO wall time ("2026-08-04T09:00:00", already in the tenant's
+ * timezone) into a friendly date plus its hour/minute — e.g.
+ * { date: "August 4, 2026", hour: 9, minute: 0 }. No timezone conversion.
  */
-function formatLocalDateTime(iso?: string | null): { date: string; time: string } | null {
+function formatLocalDate(iso?: string | null): { date: string; hour: number; minute: number } | null {
   const m = iso?.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
   if (!m) return null;
   const [, y, mo, d, hh, mi] = m;
-  let hour = Number(hh);
-  const ampm = hour >= 12 ? 'PM' : 'AM';
-  hour = hour % 12 || 12;
-  return { date: `${MONTHS[Number(mo) - 1]} ${Number(d)}, ${y}`, time: `${hour}:${mi} ${ampm}` };
+  return { date: `${MONTHS[Number(mo) - 1]} ${Number(d)}, ${y}`, hour: Number(hh), minute: Number(mi) };
 }
 
-/** Human-readable text for the caller's requested time window, or null if none given. */
+/** Coarse part of day, so notes/emails never imply a specific booked time. */
+function partOfDay(hour: number): 'morning' | 'afternoon' | 'evening' {
+  if (hour < 12) return 'morning';
+  if (hour < 17) return 'afternoon';
+  return 'evening';
+}
+
+/**
+ * The caller's requested time for the office as a non-committal date + coarse part
+ * of day only — never a specific time or window, so nothing implies a booked slot.
+ * e.g. "Job logged for August 4, 2026 in the morning".
+ */
 function resolveWindowText(args: Record<string, unknown>): string | null {
-  const s = formatLocalDateTime((args.scheduled_start as string | undefined)?.trim());
-  const e = formatLocalDateTime((args.scheduled_end as string | undefined)?.trim());
-  if (s && e) return `Job scheduled for ${s.date}, between ${s.time} and ${e.time}`;
-  if (s) return `Job scheduled for ${s.date} at ${s.time}`;
+  const d = formatLocalDate((args.scheduled_start as string | undefined)?.trim());
+  if (d) {
+    if (d.hour === 0 && d.minute === 0) return `Job logged for ${d.date}`;
+    return `Job logged for ${d.date} in the ${partOfDay(d.hour)}`;
+  }
   const display = (args.slot_display as string | undefined)?.trim();
-  return display ? `Job scheduled for ${display}` : null;
+  return display ? `Job logged for ${display}` : null;
 }
 
 /**
@@ -63,7 +72,7 @@ function resolveWindowText(args: Record<string, unknown>): string | null {
  *
  *   Service :- <canonical service type>            (omitted if not classified)
  *   Issue Description :- <caller's complete account>
- *   Job scheduled for <date>, between <start> and <end>
+ *   Job logged for <date> in the <morning/afternoon/evening>
  *
  * `issue` is the caller's own words (everything they said); `service_type` is the
  * canonical classification. `service_name` is kept as a legacy fallback for the issue.
