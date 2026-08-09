@@ -171,6 +171,49 @@ export function resolveNoDateSearchAnchorYmd(
   };
 }
 
+/**
+ * Validate and clamp an appointment to a business-hours window for `date`.
+ * The window bounds are tenant-local wall-clock `HH:mm` (or `HH:mm:ss`) times interpreted in
+ * `timeZone`. The requested duration is preserved: the appointment is shifted (not shortened)
+ * to fit inside the window. Returns an `error` only when the bounds are invalid/inverted or the
+ * duration cannot fit inside the window at all.
+ */
+export function clampToBusinessHours(
+  date: string,
+  startUtc: string,
+  endUtc: string,
+  businessHours: { start: string; end: string },
+  timeZone: string
+): { startUtc: string; endUtc: string } | { error: string } {
+  const normalize = (t: string): string => (t.length === 5 ? `${t}:00` : t);
+  const bhStartIso = localWallClockToUtcIso(date, normalize(businessHours.start), timeZone);
+  const bhEndIso = localWallClockToUtcIso(date, normalize(businessHours.end), timeZone);
+  if (!bhStartIso || !bhEndIso) return { error: 'Invalid businessHours' };
+
+  const bhStart = new Date(bhStartIso).getTime();
+  const bhEnd = new Date(bhEndIso).getTime();
+  if (bhEnd <= bhStart) {
+    return { error: 'businessHours.end must be after businessHours.start' };
+  }
+
+  const start = new Date(startUtc).getTime();
+  const end = new Date(endUtc).getTime();
+  const dur = end - start;
+  if (dur > bhEnd - bhStart) {
+    return { error: 'Appointment duration exceeds business hours window' };
+  }
+
+  let newStart = Math.max(start, bhStart);
+  if (newStart + dur > bhEnd) {
+    newStart = bhEnd - dur;
+  }
+
+  return {
+    startUtc: new Date(newStart).toISOString(),
+    endUtc: new Date(newStart + dur).toISOString(),
+  };
+}
+
 export function getUtcDayWindow(
   date: string,
   timeZone = 'UTC'

@@ -4,6 +4,7 @@ import { ServiceTitanClient } from '../services/servicetitan/client.js';
 import { computeDailyAvailability } from '../services/servicetitan/availability.js';
 import {
   aggregateShiftWindowFromTechnicians,
+  clampToBusinessHours,
   getUtcDayWindow,
   localWallClockToUtcIso,
   resolveNoDateSearchAnchorYmd,
@@ -253,6 +254,11 @@ const resolveCustomerLocationBodySchema = z
     }
   });
 
+const businessHoursField = z.object({
+  start: z.string().regex(/^\d{2}:\d{2}$/),
+  end: z.string().regex(/^\d{2}:\d{2}$/),
+});
+
 const bookAppointmentBaseSchema = z
   .object({
     tenantId: tenantIdField,
@@ -270,6 +276,7 @@ const bookAppointmentBaseSchema = z
     businessUnitId: z.number().int().positive(),
     jobTypeId: z.number().int().positive(),
     priority: z.string().min(1),
+    businessHours: businessHoursField,
     summary: z.preprocess((v) => (v === null ? undefined : v), z.string().optional()),
     date: z.preprocess((v) => (v === null ? undefined : v), z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()),
     startTime: z.preprocess((v) => (v === null || v === '' ? undefined : v), z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional()),
@@ -322,6 +329,7 @@ const bookUnassignedSchema = z
     businessUnitId: z.number().int().positive(),
     jobTypeId: z.number().int().positive(),
     priority: z.string().min(1),
+    businessHours: businessHoursField,
     summary: z.preprocess((v) => (v === null ? undefined : v), z.string().optional()),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     duration: z.preprocess((v) => (v === null ? undefined : v), z.coerce.number().int().positive().optional()),
@@ -1436,7 +1444,7 @@ serviceTitanRouter.post('/agent/book', async (req, res) => {
       locationCreated: resolved.locationCreated,
     });
 
-    const startUtc = localWallClockToUtcIso(body.date!, normalizeTimeComponent(body.startTime!), timeZone);
+    let startUtc = localWallClockToUtcIso(body.date!, normalizeTimeComponent(body.startTime!), timeZone);
     if (!startUtc) {
       return res.status(400).json({ success: false, error: 'Invalid startTime or date' });
     }
@@ -1457,6 +1465,13 @@ serviceTitanRouter.post('/agent/book', async (req, res) => {
     if (endUtc <= startUtc) {
       return res.status(400).json({ success: false, error: 'End must be after start' });
     }
+
+    const clamped = clampToBusinessHours(body.date!, startUtc, endUtc, body.businessHours, timeZone);
+    if ('error' in clamped) {
+      return res.status(400).json({ success: false, error: clamped.error });
+    }
+    startUtc = clamped.startUtc;
+    endUtc = clamped.endUtc;
 
     const jobPayload = buildServiceTitanJobsPayload({
       customerId: resolved.customerId,
@@ -1536,14 +1551,21 @@ serviceTitanRouter.post('/agent/book-unassigned', async (req, res) => {
       locationCreated: resolved.locationCreated,
     });
 
-    // date is guaranteed by bookUnassignedSchema; always anchors at 00:00 + duration
-    const startUtc = localWallClockToUtcIso(body.date, '00:00:00', timeZone);
+    // date is guaranteed by bookUnassignedSchema; anchors at the business-hours opening time + duration
+    let startUtc = localWallClockToUtcIso(body.date, normalizeTimeComponent(body.businessHours.start), timeZone);
     if (!startUtc) {
-      return res.status(400).json({ success: false, error: 'Invalid date' });
+      return res.status(400).json({ success: false, error: 'Invalid date or businessHours' });
     }
 
     const duration = body.duration ?? 60;
-    const endUtc = new Date(new Date(startUtc).getTime() + duration * 60_000).toISOString();
+    let endUtc = new Date(new Date(startUtc).getTime() + duration * 60_000).toISOString();
+
+    const clamped = clampToBusinessHours(body.date, startUtc, endUtc, body.businessHours, timeZone);
+    if ('error' in clamped) {
+      return res.status(400).json({ success: false, error: clamped.error });
+    }
+    startUtc = clamped.startUtc;
+    endUtc = clamped.endUtc;
 
     const jobPayload = buildServiceTitanJobsPayload({
       customerId: resolved.customerId,
