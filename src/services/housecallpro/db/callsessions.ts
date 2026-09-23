@@ -89,12 +89,16 @@ export async function findActiveByCallerAndTenant(
   const last10 = caller.replace(/\D/g, '').slice(-10);
   const cutoff = new Date(Date.now() - maxAgeMinutes * 60_000).toISOString();
 
+  // Caller is filtered in SQL, not after the fetch: with a post-fetch filter a busy
+  // tenant's five newest rows can all belong to other callers, and this caller's own
+  // live session is missed — minting a second session mid-call.
   const { data } = await supabase
     .from('housecallpro_callsessions')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('status', 'active')
     .gte('created_at', cutoff)
+    .ilike('caller', `%${last10}`)
     .order('created_at', { ascending: false })
     .limit(5);
 
