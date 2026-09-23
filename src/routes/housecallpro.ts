@@ -107,8 +107,11 @@ async function ensureCallSession(params: {
     if (params.callId && session.retellCallId !== params.callId) {
       await setRetellCallId(session.sessionId, params.callId);
     }
-    if (!session.leadSourceNumber && params.leadSourceNumber) {
+    // Always refresh: a reused session may carry an earlier call's tracking line,
+    // and a stale lead_source_number resolves to the wrong HCP lead source (or none).
+    if (params.leadSourceNumber && session.leadSourceNumber !== params.leadSourceNumber) {
       await setLeadSourceNumber(session.sessionId, params.leadSourceNumber);
+      session = { ...session, leadSourceNumber: params.leadSourceNumber };
     }
     return session;
   }
