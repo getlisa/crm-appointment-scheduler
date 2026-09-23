@@ -120,11 +120,15 @@ Router: [src/routes/housecallpro.ts](../../src/routes/housecallpro.ts).
 
 ### Lead-source resolution + the HCP name gotcha
 
-`resolveLeadSource` ([db/leadSources.ts](../../src/services/housecallpro/db/leadSources.ts)) looks the tracking line up in `housecallpro_lead_sources` (`lead_phone_no` → `lead_name` / `lead_source_id`, exact then last-10 fuzzy) and returns `lead_name`. `book_job` sends that string to HCP `POST /jobs` as `lead_source`, falling back to `to_number` then the literal `Clara`.
+`resolveLeadSource` ([db/leadSources.ts](../../src/services/housecallpro/db/leadSources.ts)) looks the tracking line up in `housecallpro_lead_sources` (`lead_phone_no` → `lead_name` / `lead_source_id`, exact then last-10 fuzzy) and returns `lead_name`. `book_job` sends that string to HCP `POST /jobs` as `lead_source`. When the line is unmapped, `lead_source` is **omitted from the request body** — HCP rejects any name it doesn't know, so sending a placeholder loses the whole job.
 
 > **⚠ HCP validates `lead_source` against the account's configured lead sources by name.** If the string is not an existing HCP lead source, `POST /jobs` returns `400 {"error":{"message":"Lead source not found"}}` and the job is **not** created. Therefore `housecallpro_lead_sources.lead_name` must be the **exact** name of a lead source configured in that HCP account (e.g. HCP's "Angi" vs a stored "Angie's Leads" will fail). Keep the stored names in sync with HCP, and watch for stray whitespace/newlines.
 
-Fallback chain for the stamped source: **tracking line's `lead_name` → `to_number` → `Clara`**.
+Fallback chain for the stamped source: **tracking line's `lead_name` → no `lead_source` sent at all**. The `lsrc_…` id is never sent: `lead_source` is a name field, so an id in it fails the same name lookup.
+
+`GET /lead_sources` (read-only, paginated) lists the account's configured sources as `{ id, name, editable }` — use it to confirm a stored `lead_name` before adding a `housecallpro_lead_sources` row.
+
+If HCP still rejects the resolved name, `book_job` retries the same job **once without `lead_source`** and logs `[hcp] book_job lead_source rejected by HCP — retrying without it`. The job is created; the attribution is lost and must be fixed in `housecallpro_lead_sources`.
 
 ---
 
@@ -147,7 +151,8 @@ The agent config ([retell/Zephyr Heating and Air LLC - Office Hours (1).json](..
 |---|---|---|
 | `POST /jobs → 400 "Lead source not found"` | the `lead_name` we send isn't an exact HCP-configured lead source | align `housecallpro_lead_sources.lead_name` to the exact HCP name; trim whitespace/newlines |
 | Agent asks for name/phone instead of greeting | `customer_lookup` not called, or caller not in `housecallpro_customers` | ensure the tool is wired + the customer cache is synced; check `[hcp] customer_lookup` matchCount |
-| `lead_source` stamped as `Clara` | tracking line missing from `housecallpro_lead_sources`, or `lead_source_number` not set on the call | check `[hcp] call_started req` shows `leadSourceNumber`; add the `housecallpro_lead_sources` row |
+| Job created with no `lead_source` | tracking line missing from `housecallpro_lead_sources`, or `lead_source_number` not set on the call | check `[hcp] call_started req` shows `leadSourceNumber`; add the `housecallpro_lead_sources` row |
+| `lead_source_number` on the session is a line from an *earlier* call | a stale `active` session was reused | sessions are only reused for 30 minutes (`ACTIVE_SESSION_REUSE_MINUTES`) and the tracking line is overwritten on every call — confirm the deploy is current |
 | No `call_inbound` in the logs | expected — the Twilio Function pre-registers the call (see §2) | not a bug; identification is via `call_started` + `customer_lookup` |
 | `/fn/*` "session not found" | `call_started` never created the session | `resolveSession` now create-if-missing; confirm `call_started` reaches the server |
 | `book_job` "no address selected" / "no customer identified" | booking called before address/identify | prompt enforces order; run `customer_lookup` and `match_address`/`create_address` first |

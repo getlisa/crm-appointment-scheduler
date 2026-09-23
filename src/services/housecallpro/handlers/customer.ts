@@ -3,6 +3,8 @@
  *   confirm_customer  — finalize a candidate after multiple_matches
  *   create_customer   — non-customer flow: POST /customers, then cache + match on session
  *   match_address     — Scenario B: fuzzy-match a spoken address to a customer address_id
+ *                       (returns `options` with the saved addresses when the caller
+ *                       names none, e.g. "the address on file")
  *   create_address    — add a new service address to the customer
  */
 
@@ -69,7 +71,9 @@ export async function handleCreateCustomer(
     day: 'numeric',
   });
   const lead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
-  const leadSource = lead?.leadName ?? lead?.leadSourceId ?? 'Clara';
+  // `lead_source` is a lead-source NAME, not an id — HCP rejects anything that is
+  // not one of the account's configured names, so send nothing when unmapped.
+  const leadSource = lead?.leadName ?? null;
 
   try {
     const created = await createCustomer(ctx, {
@@ -80,7 +84,7 @@ export async function handleCreateCustomer(
       mobile_number: mobileNumber || undefined,
       notifications_enabled: true,
       tags: ['Clara'],
-      lead_source: leadSource,
+      ...(leadSource ? { lead_source: leadSource } : {}),
       notes: `Created by Customer on ${callDate}`,
     });
 
@@ -137,6 +141,28 @@ export async function handleMatchAddress(
   const addresses = Object.values(map.addresses);
   if (addresses.length === 0) {
     return { result: JSON.stringify({ status: 'no_addresses', message: 'Customer has no saved addresses — create one.' }) };
+  }
+
+  // A spoken address with no digits ("the address on file", "same as last time")
+  // cannot score against a stored street. With one saved address, use it; with
+  // several, hand them back so the agent can read them out and let the caller pick.
+  if (!/\d/.test(spoken)) {
+    if (addresses.length === 1) {
+      await setServiceAddressMap(session.sessionId, { ...map, selectedAddressId: addresses[0].id });
+      return {
+        result: JSON.stringify({
+          status: 'matched',
+          address_id: addresses[0].id,
+          address: addresses[0].formatted,
+        }),
+      };
+    }
+    return {
+      result: JSON.stringify({
+        status: 'options',
+        candidates: addresses.map(a => ({ address_id: a.id, address: a.formatted })),
+      }),
+    };
   }
 
   const scored = addresses

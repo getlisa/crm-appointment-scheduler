@@ -139,6 +139,8 @@ curl -X POST http://localhost:8080/api/housecallpro/fn/match_address -H "Content
 
 Other statuses: `ambiguous` (with `candidates[]`), `not_found`, or `no_addresses` → collect the address and call `create_address`.
 
+`options` is returned when `spoken_address` contains no digits — the caller pointed at a saved address ("the address on file", "same as last time") instead of reciting one. The response carries `candidates[]` (all saved addresses) so the agent can read them back and ask which one; with exactly one saved address the handler selects it and returns `matched` instead.
+
 ---
 
 ## Step 3e — Create address *(if match_address is not_found / no_addresses)*
@@ -160,7 +162,7 @@ The new `address_id` becomes the session's selected address, so `book_job` can o
 
 Office-Hours only. Creates the job in HCP (`POST /jobs`) as an **unscheduled "new job"** — no `schedule` and no `line_items` are sent, so it lands in the office's New pipeline for them to schedule. `service_type` is the canonical classification (see [zephyr-service-catalog.md](./zephyr-service-catalog.md)); `issue` is the caller's complete account in their own words; `scheduled_start`/`scheduled_end` are optional and only capture the caller's *requested* window (recorded in the job `notes` as free text — not a booked time). `address_id` is optional — the selected address from match/create is used if omitted. (`service_name` is still accepted as a legacy alias for `issue`.)
 
-The job's `lead_source` is resolved from the dialed tracking line (`lead_source_number` ?? `to_number`) via `housecallpro_lead_sources`, falling back to `Clara` when no mapping exists. The request writes `housecallpro_jobs` (the requested window is kept there for our records only).
+The job's `lead_source` is resolved from the dialed tracking line (`lead_source_number` ?? `to_number`) via `housecallpro_lead_sources`, and is omitted when the line has no mapping (HCP rejects unknown lead-source names with `400 "Lead source not found"`; a rejected name is retried once without it). The request writes `housecallpro_jobs` (the requested window is kept there for our records only).
 
 The job `notes` sent to HCP look like:
 ```

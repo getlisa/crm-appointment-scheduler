@@ -71,18 +71,34 @@ export async function getByRetellCallId(retellCallId: string): Promise<HcpCallSe
   return mapRow(data as Record<string, unknown>);
 }
 
-/** Finds the most recent active session for a caller+tenant (last-10 match in JS). */
+/** How long an `active` session stays reusable for the same caller (minutes). */
+export const ACTIVE_SESSION_REUSE_MINUTES = 30;
+
+/**
+ * Finds a RECENT active session for a caller+tenant (last-10 match in JS).
+ *
+ * Bounded by `maxAgeMinutes`: a session whose call_ended webhook never landed
+ * stays `status = 'active'` forever, and re-attaching it to a later call drags
+ * that call's lead_source_number and service_address_map into the new one.
+ */
 export async function findActiveByCallerAndTenant(
   tenantId: string,
   caller: string,
+  maxAgeMinutes: number = ACTIVE_SESSION_REUSE_MINUTES,
 ): Promise<HcpCallSessionRow | null> {
   const last10 = caller.replace(/\D/g, '').slice(-10);
+  const cutoff = new Date(Date.now() - maxAgeMinutes * 60_000).toISOString();
 
+  // Caller is filtered in SQL, not after the fetch: with a post-fetch filter a busy
+  // tenant's five newest rows can all belong to other callers, and this caller's own
+  // live session is missed — minting a second session mid-call.
   const { data } = await supabase
     .from('housecallpro_callsessions')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('status', 'active')
+    .gte('created_at', cutoff)
+    .ilike('caller', `%${last10}`)
     .order('created_at', { ascending: false })
     .limit(5);
 

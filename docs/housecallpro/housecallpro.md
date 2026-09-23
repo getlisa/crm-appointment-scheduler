@@ -74,7 +74,7 @@ The agent never threads IDs. `book_job` reads everything from the session set by
 |---|---|---|
 | `customer_id` | `housecallpro_customer_id` | `customer_lookup` / `confirm_customer` / `lookup_customer_fuzzy` / `create_customer` |
 | `address_id` | `service_address_map.selectedAddressId` (or an explicit arg) | `match_address` (confident) / `create_address` |
-| `lead_source` | `resolveLeadSource(lead_source_number ?? to_number)` → `lead_name` ?? `lead_source_id` ?? `Clara` | `call_started` captures `lead_source_number` |
+| `lead_source` | `resolveLeadSource(lead_source_number ?? to_number)` → `lead_name` (a NAME, never the `lsrc_…` id); omitted when unmapped | `call_started` captures `lead_source_number` |
 
 > **⚠️ Gotcha #2 — HCP validates `lead_source` by name.** The stamped value must be an **exact
 > configured lead source name** in that HCP account, or `POST /jobs` returns

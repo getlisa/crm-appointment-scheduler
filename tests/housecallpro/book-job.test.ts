@@ -2,7 +2,7 @@
  * Unit tests for handleBookJob — asserts the unscheduled "new job" contract:
  * the POST /jobs body has no `schedule` and no `line_items`, the issue +
  * requested window live in `notes`, and `lead_source` is resolved from the
- * dialed tracking line (falling back to 'Clara').
+ * dialed tracking line (omitted when the line is unmapped).
  *
  * All I/O (HCP client, db writes, lead-source lookup, email) is mocked.
  */
@@ -91,7 +91,7 @@ describe('handleBookJob — unscheduled new job', () => {
     expect(body.customer_id).toBe('cus_1');
     expect(body.address_id).toBe('adr_1');
     expect(body.notes).toBe(
-      'Issue Description :- AC not cooling\nJob between 2026-07-24T14:00:00 to 2026-07-24T16:00:00',
+      'Issue Description :- AC not cooling\nJob logged for July 24, 2026 in the afternoon',
     );
 
     const result = JSON.parse(res.result);
@@ -111,13 +111,48 @@ describe('handleBookJob — unscheduled new job', () => {
     expect(body.lead_source).toBe('Google LSA');
   });
 
-  it('falls back to Clara when the line has no lead-source mapping', async () => {
+  it('never sends the lsrc_ id in the lead_source name field', async () => {
+    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'lsrc_abc', leadName: null });
+
+    await handleBookJob(makeSession(), ctx, { service_name: 'AC not cooling' });
+
+    const body = createJobMock.mock.calls[0][1] as HcpCreateJobInput;
+    expect('lead_source' in body).toBe(false);
+  });
+
+  it('sends no lead_source when the line has no lead-source mapping', async () => {
     resolveLeadSourceMock.mockResolvedValue(null);
 
     await handleBookJob(makeSession(), ctx, { service_name: 'AC not cooling' });
 
     const body = createJobMock.mock.calls[0][1] as HcpCreateJobInput;
-    expect(body.lead_source).toBe('Clara');
+    expect('lead_source' in body).toBe(false);
+  });
+
+  it('retries without lead_source when HCP rejects the stored lead name', async () => {
+    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'ls_1', leadName: 'google my business' });
+    createJobMock
+      .mockRejectedValueOnce(
+        new Error('HCP POST /jobs → 400: {"error":{"message":"Lead source not found"}}'),
+      )
+      .mockResolvedValueOnce({ id: 'job_2', invoice_number: '1043', work_status: 'new job' });
+
+    const res = await handleBookJob(makeSession(), ctx, { service_name: 'AC not cooling' });
+
+    expect(createJobMock).toHaveBeenCalledTimes(2);
+    const retryBody = createJobMock.mock.calls[1][1] as HcpCreateJobInput;
+    expect('lead_source' in retryBody).toBe(false);
+    expect(JSON.parse(res.result).status).toBe('created');
+  });
+
+  it('does not retry when the failure is unrelated to the lead source', async () => {
+    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'ls_1', leadName: 'Google LSA' });
+    createJobMock.mockRejectedValueOnce(new Error('HCP POST /jobs → 500: boom'));
+
+    const res = await handleBookJob(makeSession(), ctx, { service_name: 'AC not cooling' });
+
+    expect(createJobMock).toHaveBeenCalledTimes(1);
+    expect(res.result).toContain('job creation failed');
   });
 
   it('omits the "Job between" line when no requested window is given', async () => {

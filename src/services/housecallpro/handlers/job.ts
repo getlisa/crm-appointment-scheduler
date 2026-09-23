@@ -119,6 +119,30 @@ function resolveNotes(args: Record<string, unknown>): string {
   return notes;
 }
 
+/**
+ * Creates the job, and retries once without `lead_source` when HCP rejects the
+ * stored lead name ("Lead source not found"). Losing the attribution is better
+ * than losing the caller's job.
+ */
+async function createJobTolerantOfLeadSource(
+  ctx: HcpContext,
+  body: HcpCreateJobInput,
+  sessionId: string,
+): Promise<Awaited<ReturnType<typeof createJob>>> {
+  try {
+    return await createJob(ctx, body);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!body.lead_source || !/lead source not found/i.test(msg)) throw err;
+    console.warn('[hcp] book_job lead_source rejected by HCP — retrying without it', {
+      sessionId,
+      leadSource: body.lead_source,
+    });
+    const { lead_source: _rejected, ...withoutLeadSource } = body;
+    return await createJob(ctx, withoutLeadSource);
+  }
+}
+
 export async function handleBookJob(
   session: HcpCallSessionRow,
   ctx: HcpContext,
@@ -143,7 +167,11 @@ export async function handleBookJob(
   // Prefer the SIP Diversion tracking line (the actual lead source); fall back to
   // to_number (the shared DID) only when the diversion wasn't captured.
   const lead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
-  const leadSource = lead?.leadName ?? lead?.leadSourceId ?? 'Clara';
+  // `lead_source` is a lead-source NAME, not an id: HCP looks the string up among
+  // the account's configured lead sources and rejects the whole job with
+  // 400 "Lead source not found" when it doesn't match. So an unmapped line (or a
+  // row with no lead_name) sends no lead_source at all — never an `lsrc_…` id.
+  const leadSource = lead?.leadName ?? null;
 
   // Unscheduled "new job": no `schedule`, no `line_items` — the issue + requested
   // window are in `notes`. HCP returns work_status "new job".
@@ -151,7 +179,7 @@ export async function handleBookJob(
     customer_id: customerId,
     address_id: addressId,
     notes,
-    lead_source: leadSource,
+    ...(leadSource ? { lead_source: leadSource } : {}),
   };
 
   // The caller's requested window is kept for our own records only (not sent to HCP).
@@ -159,7 +187,7 @@ export async function handleBookJob(
   const requestedEnd = (args.scheduled_end as string | undefined)?.trim() || null;
 
   try {
-    const job = await createJob(ctx, body);
+    const job = await createJobTolerantOfLeadSource(ctx, body, session.sessionId);
     const jobNumber = (job.invoice_number as string | null) ?? null;
     const workStatus = (job.work_status as string | null) ?? 'new job';
 

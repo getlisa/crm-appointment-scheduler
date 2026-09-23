@@ -107,8 +107,11 @@ async function ensureCallSession(params: {
     if (params.callId && session.retellCallId !== params.callId) {
       await setRetellCallId(session.sessionId, params.callId);
     }
-    if (!session.leadSourceNumber && params.leadSourceNumber) {
+    // Always refresh: a reused session may carry an earlier call's tracking line,
+    // and a stale lead_source_number resolves to the wrong HCP lead source (or none).
+    if (params.leadSourceNumber && session.leadSourceNumber !== params.leadSourceNumber) {
       await setLeadSourceNumber(session.sessionId, params.leadSourceNumber);
+      session = { ...session, leadSourceNumber: params.leadSourceNumber };
     }
     return session;
   }
@@ -168,6 +171,7 @@ async function resolveSession(
     retellCallId: session.retellCallId,
     tenantId: session.tenantId,
     matchedCustomerId: session.housecallproCustomerId,
+    leadSourceNumber: session.leadSourceNumber,
   });
   return { session, ctx };
 }
@@ -512,7 +516,10 @@ function fnRoute(
       const fromNumber = call?.from_number as string | undefined;
       const toNumber = call?.to_number as string | undefined;
       const args = normalizedHcpPayload(req);
-      console.log(`[hcp] fn/${name} req`, { callId, fromNumber, toNumber, args });
+      // leadSourceNumber is logged because attribution depends on it riding in on
+      // every /fn payload (dynamic variable, else SIP Diversion) — see resolveSession.
+      const leadSourceNumber = leadSourceNumberFromCall(call as CallLike | undefined);
+      console.log(`[hcp] fn/${name} req`, { callId, fromNumber, toNumber, leadSourceNumber, args });
 
       const resolved = await resolveSession(callId, fromNumber, toNumber, call as CallLike | undefined);
       if (!resolved) {
