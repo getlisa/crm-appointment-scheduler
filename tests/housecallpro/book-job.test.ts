@@ -111,6 +111,15 @@ describe('handleBookJob — unscheduled new job', () => {
     expect(body.lead_source).toBe('Google LSA');
   });
 
+  it('never sends the lsrc_ id in the lead_source name field', async () => {
+    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'lsrc_abc', leadName: null });
+
+    await handleBookJob(makeSession(), ctx, { service_name: 'AC not cooling' });
+
+    const body = createJobMock.mock.calls[0][1] as HcpCreateJobInput;
+    expect('lead_source' in body).toBe(false);
+  });
+
   it('sends no lead_source when the line has no lead-source mapping', async () => {
     resolveLeadSourceMock.mockResolvedValue(null);
 

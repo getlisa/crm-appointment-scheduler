@@ -124,7 +124,9 @@ Router: [src/routes/housecallpro.ts](../../src/routes/housecallpro.ts).
 
 > **⚠ HCP validates `lead_source` against the account's configured lead sources by name.** If the string is not an existing HCP lead source, `POST /jobs` returns `400 {"error":{"message":"Lead source not found"}}` and the job is **not** created. Therefore `housecallpro_lead_sources.lead_name` must be the **exact** name of a lead source configured in that HCP account (e.g. HCP's "Angi" vs a stored "Angie's Leads" will fail). Keep the stored names in sync with HCP, and watch for stray whitespace/newlines.
 
-Fallback chain for the stamped source: **tracking line's `lead_name` → `lead_source_id` → no `lead_source` sent at all**.
+Fallback chain for the stamped source: **tracking line's `lead_name` → no `lead_source` sent at all**. The `lsrc_…` id is never sent: `lead_source` is a name field, so an id in it fails the same name lookup.
+
+`GET /lead_sources` (read-only, paginated) lists the account's configured sources as `{ id, name, editable }` — use it to confirm a stored `lead_name` before adding a `housecallpro_lead_sources` row.
 
 If HCP still rejects the resolved name, `book_job` retries the same job **once without `lead_source`** and logs `[hcp] book_job lead_source rejected by HCP — retrying without it`. The job is created; the attribution is lost and must be fixed in `housecallpro_lead_sources`.
 

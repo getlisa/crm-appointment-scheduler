@@ -167,10 +167,11 @@ export async function handleBookJob(
   // Prefer the SIP Diversion tracking line (the actual lead source); fall back to
   // to_number (the shared DID) only when the diversion wasn't captured.
   const lead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
-  // HCP validates lead_source against the account's configured lead sources and
-  // rejects the whole job with 400 "Lead source not found" otherwise — so an
-  // unmapped tracking line sends no lead_source at all rather than a placeholder.
-  const leadSource = lead?.leadName ?? lead?.leadSourceId ?? null;
+  // `lead_source` is a lead-source NAME, not an id: HCP looks the string up among
+  // the account's configured lead sources and rejects the whole job with
+  // 400 "Lead source not found" when it doesn't match. So an unmapped line (or a
+  // row with no lead_name) sends no lead_source at all — never an `lsrc_…` id.
+  const leadSource = lead?.leadName ?? null;
 
   // Unscheduled "new job": no `schedule`, no `line_items` — the issue + requested
   // window are in `notes`. HCP returns work_status "new job".

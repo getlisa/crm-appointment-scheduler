@@ -71,9 +71,9 @@ export async function handleCreateCustomer(
     day: 'numeric',
   });
   const lead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
-  // HCP rejects any lead_source that is not one of the account's configured lead
-  // sources ("Lead source not found"), so send nothing when the line is unmapped.
-  const leadSource = lead?.leadName ?? lead?.leadSourceId ?? null;
+  // `lead_source` is a lead-source NAME, not an id — HCP rejects anything that is
+  // not one of the account's configured names, so send nothing when unmapped.
+  const leadSource = lead?.leadName ?? null;
 
   try {
     const created = await createCustomer(ctx, {
