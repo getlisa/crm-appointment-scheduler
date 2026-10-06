@@ -16,7 +16,7 @@ Last verified: 2026-10-05 against the Retell agent exports in `retell/`, the bac
 
 | Tenant | Agent | Version | Dialed number | Tools | Writes to HCP |
 |---|---|---|---|---|---|
-| Pierce Electric | Office Hours | v6 (`llm_07d012403bf79a92a2eddd9dbd8c`) | +1 707 622 3573 | `customer_lookup`, `lookup_customer_fuzzy`, `confirm_customer`, `create_customer`, `match_address`, `create_address`, `create_lead`, `end_call` | customer, address, lead |
+| Pierce Electric | Office Hours | v6 (`llm_07d012403bf79a92a2eddd9dbd8c`) | +1 707 622 3573 | `customer_lookup`, `lookup_customer_fuzzy`, `confirm_customer`, `create_customer`, `match_address`, `create_address`, `book_job`, `create_lead`, `end_call` | customer, address, lead |
 | Pierce Electric | After Hours | v5 (`llm_70dd7b08d0431b4ba1bc8a016071`) | same line, after-hours routing | `escalate`, `end_call` | none |
 | Zephyr Heating and Air | Office Hours | v3 (`llm_5b93a87bda2d0ebba94d5f96708c`) | +1 747 837 3403 | same eight tools as Pierce Office Hours | customer, address, job |
 | Zephyr Heating and Air | After Hours | v3 (`llm_1cf81c06aa11ad26685369ac33b6`) | same line, after-hours routing | `escalate`, `end_call` | none |
@@ -40,7 +40,7 @@ Routes: `src/routes/housecallpro.ts:540-547`. Every tool call carries the Retell
 | `match_address` (spoken_address) | `matched`, `options`, `ambiguous`, `not_found`, `no_addresses` | Scores the spoken address against the customer's saved addresses. A spoken address with no digits ("the address on file") returns `matched` if one address exists, otherwise `options` with the list to read back. Below the confidence floor returns `not_found`. Two close scores return `ambiguous` with up to three candidates. |
 | `create_address` (street, city, state, zip, optional street_line_2, country) | `created` | Adds the address to the identified customer and selects it. |
 | `book_job` (service_type, issue, optional scheduled_start, scheduled_end, address_id) | `created` with `work_status: "new job"`, `scheduled: false` | Creates an unscheduled HCP job. No `schedule`, no `line_items`. Issue and requested window go into job notes. `lead_source` is attributed from the tracking line. If HCP replies "Lead source not found" the job is retried without it. The requested window is stored in our own `callsessions` table only. Sends the notification email best-effort. |
-| `create_lead` (service_type, issue, job_type, optional lead_source, scheduled_start, scheduled_end, address_id) | `created` with `scheduled: false` | Pierce only. Creates an HCP lead against the customer pinned to the session. Service type, issue and the part-of-day preference go into the lead's `note` (singular — see 7.4). `job_type` is a name from the tool enum, resolved to its uuid in `housecallpro_job_types` and sent as top-level `job_type_uuid`; an unknown name is dropped rather than failing the lead. `lead_source` prefers the caller's spoken answer, else the tracking line; on "Lead source not found" the lead is retried without it. Row persisted to `housecallpro_leads`. Sends the `lead_created` email best-effort. |
+| `create_lead` (service_type, issue, job_type, optional lead_source, scheduled_start, scheduled_end, address_id) | `created` with `scheduled: false` | Pierce's ending. Creates an HCP lead against the customer pinned to the session. Service type, issue and the part-of-day preference go into the lead's `note` (singular — see 7.4). `job_type` is a name from the tool enum, resolved to its uuid in `housecallpro_job_types` and sent as top-level `job_type_uuid`; an unknown name is dropped rather than failing the lead. `lead_source` prefers the caller's spoken answer, else the tracking line; on "Lead source not found" the lead is retried without it. Row persisted to `housecallpro_leads`. Sends the `lead_created` email best-effort. |
 | `escalate` (escalation_type, summary, optional caller_name, callback_number) | `captured` | Sends the notification email with the same structured notes block as the booking email. No HCP write. |
 
 Error paths: a tool call with no live session returns `error: session not found`. Any thrown error returns `error: internal`. Both agents are told to retry once, then fall back to message-taking.
@@ -336,6 +336,17 @@ Subject "Re: Fwd: Service Request — Logan Pritchard (general)", Gmail thread i
 - 2026-09-30 13:49 PT, Laura: "My understanding of how House Call Pro works is you have to create a customer before you can assign it as a 'lead'." Then: "When incoming caller is not already in our customer list, Clara will: Capture customer info (name, address for service, cell phone, email and nature of the call) and assign it as a lead. From there I will decided to assign it as an estimate, book a job, etc."
 - 2026-09-30 14:08 PT, Subham sent the HCP Create Lead doc link and stated the customer auto-creation is an API-level behaviour we cannot bypass.
 - 2026-09-30 14:47 PT, Laura: "Okay that all sounds great".
+
+### 2.3 Why book_job is still on the Pierce agent
+
+The Pierce Office Hours agent carries both `book_job` and `create_lead`. Nothing was removed from the tool list; `create_lead` was added to it. The backend is the same shape — all eight original `/fn/` routes are untouched and `/fn/create_lead` is a ninth.
+
+`book_job` is therefore reachable on a Pierce call and must never be chosen. Two guards, because the tool being present is the risk:
+
+- Its tool description on the Pierce agent opens with "DO NOT CALL THIS TOOL ON THIS LINE" and says why.
+- The prompt rules it out twice: in the HCP section (`prompt.md:293`) and in the CORE RULE block (`prompt.md:495`).
+
+If a Pierce job ever appears from a Clara call, this is the thing that failed — check the Retell transcript for a `book_job` invocation before looking anywhere else.
 
 ## 7.4 POST /leads field support, probed live 2026-09-30
 
