@@ -135,10 +135,11 @@ export interface HcpCreateLeadInput {
   /** An existing customer. Mutually exclusive with `customer`. */
   customer_id?: string;
   /**
-   * A new customer, created as a side effect of the lead. HCP returns the full
-   * customer on the response, but does NOT apply `tags`, `lead_source` or
-   * `notes` to it, and does not save `address` as a customer address record —
-   * verified 2026-10-06 against lead #136.
+   * A new customer, created as a side effect of the lead. Everything nested here
+   * is applied to the customer record — including `addresses`, which become real
+   * customer addresses and whose first entry is linked to the lead. The
+   * top-level `address` does NOT: it is text on the lead and comes back with a
+   * null id. Verified 2026-10-07 against leads #136 and #143.
    */
   customer?: {
     first_name?: string;
@@ -146,10 +147,16 @@ export interface HcpCreateLeadInput {
     email?: string;
     mobile_number?: string;
     company?: string;
+    notifications_enabled?: boolean;
+    tags?: string[];
+    notes?: string;
+    lead_source?: string;
+    /** Saved as real customer addresses, and the first one is linked to the lead. */
+    addresses?: { street?: string; street_line_2?: string; city?: string; state?: string; zip?: string }[];
   };
   /** An address already on the customer. Mutually exclusive with `address`. */
   address_id?: string;
-  /** Address text stored on the lead only — it creates no customer address. */
+  /** Text on the lead only, id comes back null. Prefer `customer.addresses`. */
   address?: {
     street?: string;
     street_line_2?: string;
@@ -177,6 +184,7 @@ export interface HcpLeadResponse {
   id: string;
   number?: number | null;
   customer?: HcpApiCustomer | null;
+  address?: HcpApiAddress | null;
   lead_source?: string | null;
   job_fields?: { job_type_uuid?: string | null; business_unit_uuid?: string | null } | null;
   [key: string]: unknown;

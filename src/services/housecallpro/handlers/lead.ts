@@ -17,7 +17,7 @@
  *   `note` is singular, and `job_type_uuid` is top level.
  */
 
-import { createAddress, createLead } from '../client.js';
+import { createLead } from '../client.js';
 import { resolveNotes } from '../requestNotes.js';
 import { normalizeEmail } from '../email.js';
 import { insertLead } from '../db/leads.js';
@@ -164,11 +164,23 @@ export async function handleCreateLead(
             ...((args.company as string | undefined)?.trim()
               ? { company: (args.company as string).trim() }
               : {}),
+            notifications_enabled: true,
+            // The same provenance a customer gets when created on its own.
+            tags: ['Clara'],
+            notes: `Created by Clara on ${new Date().toLocaleDateString('en-US', {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+            })}`,
+            ...(leadSource ? { lead_source: leadSource } : {}),
+            // Nested, not top level: these become real customer addresses and the
+            // first is linked to the lead. A top-level `address` is text only.
+            ...(hasInlineAddress
+              ? { addresses: [{ street: street!, city: city!, state: state!, zip: zip! }] }
+              : {}),
           },
         }),
-    ...(addressId
-      ? { address_id: addressId }
-      : { address: { street: street!, city: city!, state: state!, zip: zip! } }),
+    ...(addressId ? { address_id: addressId } : {}),
     note,
     tags: ['Clara'],
     ...(jobTypeUuid ? { job_type_uuid: jobTypeUuid } : {}),
@@ -199,25 +211,14 @@ export async function handleCreateLead(
       await setMatchedCustomer(session.sessionId, lead.customer.id, createdName, 'new_customer')
         .catch(() => undefined);
 
-      // The inline `address` lives on the lead as text only — HCP saves no
-      // customer address record for it. Create one so the office has a real
-      // address to dispatch to when the lead is converted.
-      if (hasInlineAddress) {
-        const addr = await createAddress(ctx, lead.customer.id, {
-          street: street!,
-          city: city!,
-          state: state!,
-          zip: zip!,
-          // HCP rejects an address with 422 "Country is required" without this.
-          country: (args.country as string | undefined)?.trim() || 'US',
-        }).catch((err) => {
-          console.warn('[hcp] create_lead could not save the address on the new customer', {
-            sessionId: session.sessionId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          return null;
+      // customer.addresses created a real address and linked it to the lead, so
+      // its id comes back on the response — no follow-up call needed.
+      savedAddressId = (lead.address?.id as string | undefined) ?? null;
+      if (hasInlineAddress && !savedAddressId) {
+        console.warn('[hcp] create_lead new customer has no saved address', {
+          sessionId: session.sessionId,
+          leadId: lead.id,
         });
-        savedAddressId = addr?.id ?? null;
       }
     }
 
