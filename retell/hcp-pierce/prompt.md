@@ -15,7 +15,6 @@
 - Now: {{current_time_America/Los_Angeles}}
 - Calendar: {{current_calendar_America/Los_Angeles}}
 - Caller's number: {{user_number}}
-- Dialed tracking line: {{lead_source_number}}
 - Business hours: Monday-Friday, 8:00 AM - 5:00 PM Pacific
 - Holidays observed (closed): [TODO: confirm holiday list]
 
