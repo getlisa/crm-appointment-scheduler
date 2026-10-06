@@ -14,7 +14,6 @@ import type { Mock } from 'vitest';
 vi.mock('../../src/services/housecallpro/client.js', () => ({
   createLead: vi.fn(),
   createAddress: vi.fn(),
-  listLeadSources: vi.fn(),
 }));
 vi.mock('../../src/services/housecallpro/db/leads.js', () => ({
   insertLead: vi.fn().mockResolvedValue(undefined),
@@ -36,8 +35,8 @@ vi.mock('../../src/services/housecallpro/emailNotificationService.js', () => ({
   sendHcpNotification: vi.fn().mockResolvedValue({ sent: false }),
 }));
 
-import { handleCreateLead, clearLeadSourceCache } from '../../src/services/housecallpro/handlers/lead.js';
-import { createLead, createAddress, listLeadSources } from '../../src/services/housecallpro/client.js';
+import { handleCreateLead } from '../../src/services/housecallpro/handlers/lead.js';
+import { createLead, createAddress } from '../../src/services/housecallpro/client.js';
 import { insertLead } from '../../src/services/housecallpro/db/leads.js';
 import { resolveJobTypeUuid, resolveJobTypeName } from '../../src/services/housecallpro/db/jobTypes.js';
 import { setLeadCreated, setMatchedCustomer } from '../../src/services/housecallpro/db/callsessions.js';
@@ -57,7 +56,6 @@ const setLeadCreatedMock = setLeadCreated as unknown as Mock;
 const setMatchedCustomerMock = setMatchedCustomer as unknown as Mock;
 const upsertCustomerMock = upsertCustomer as unknown as Mock;
 const createAddressMock = createAddress as unknown as Mock;
-const listLeadSourcesMock = listLeadSources as unknown as Mock;
 const sendHcpNotificationMock = sendHcpNotification as unknown as Mock;
 
 const REPAIR_UUID = 'jbt_a9d450afb2924b17bde05435c2c824dc';
@@ -96,14 +94,6 @@ function makeSession(overrides: Partial<HcpCallSessionRow> = {}): HcpCallSession
 
 beforeEach(() => {
   vi.clearAllMocks();
-  clearLeadSourceCache();
-  listLeadSourcesMock.mockResolvedValue({
-    lead_sources: [
-      { id: 'lsrc_1', name: 'Google' },
-      { id: 'lsrc_2', name: 'PG&E' },
-      { id: 'lsrc_3', name: 'Google Local Services Vallejo' },
-    ],
-  });
   createLeadMock.mockResolvedValue({ id: 'lea_1', number: 136 });
   createAddressMock.mockResolvedValue({ id: 'adr_new' });
   resolveJobTypeUuidMock.mockResolvedValue(null);
@@ -193,37 +183,17 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(body.note).toBe('Issue Description :- Something is buzzing behind the wall');
   });
 
-  it('uses the caller\'s answer when it names a configured source', async () => {
-    // call_69ba94bf: the caller said "Google", which Pierce has configured, and
-    // the lead was still created with no attribution at all.
+  it('never promotes the spoken answer to attribution, even when it names a real source', async () => {
+    // call_69ba94bf sent lead_source "Google" without ever asking the caller.
+    // An invented answer must not become HCP marketing data.
     await handleCreateLead(makeSession({ leadSourceName: null }), ctx, {
       issue: 'Wiring inspection',
       lead_source: 'Google',
     });
 
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
-    expect(body.lead_source).toBe('Google');
+    expect(body.lead_source).toBe('Clara');
     expect(body.note).toContain('Heard about us :- Google');
-  });
-
-  it('matches a configured name regardless of casing and punctuation', async () => {
-    await handleCreateLead(makeSession({ leadSourceName: null }), ctx, {
-      issue: 'No power',
-      lead_source: 'pg and e',
-    });
-
-    expect((createLeadMock.mock.calls[0][1] as HcpCreateLeadInput).lead_source).toBe('PG&E');
-  });
-
-  it('does not consult the account list when the tracking line already resolved', async () => {
-    await handleCreateLead(makeSession({ leadSourceName: 'Google Local Services Vallejo' }), ctx, {
-      issue: 'No power',
-      lead_source: 'Google',
-    });
-
-    expect(listLeadSourcesMock).not.toHaveBeenCalled();
-    expect((createLeadMock.mock.calls[0][1] as HcpCreateLeadInput).lead_source)
-      .toBe('Google Local Services Vallejo');
   });
 
   it('stamps Clara when the dialed line maps to nothing, keeping the words on the note', async () => {

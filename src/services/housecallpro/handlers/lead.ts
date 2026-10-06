@@ -17,7 +17,7 @@
  *   `note` is singular, and `job_type_uuid` is top level.
  */
 
-import { createAddress, createLead, listLeadSources } from '../client.js';
+import { createAddress, createLead } from '../client.js';
 import { resolveNotes } from '../requestNotes.js';
 import { normalizeEmail } from '../email.js';
 import { insertLead } from '../db/leads.js';
@@ -38,42 +38,6 @@ import type {
  * name and the lead is retried without it.
  */
 const AGENT_LEAD_SOURCE = 'Clara';
-
-/** Configured lead-source names per tenant, cached for a warm instance. */
-const LEAD_SOURCE_TTL_MS = 10 * 60_000;
-const leadSourceCache = new Map<string, { names: string[]; at: number }>();
-
-/** Lowercase, drop punctuation and spacing, so "PG&E" and "pg and e" agree. */
-function normaliseName(s: string): string {
-  return s.toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
-}
-
-/**
- * Returns the account's spelling of a lead source when the caller named one
- * exactly, else null. Exact match only — see the call site for why.
- */
-async function matchConfiguredLeadSource(
-  ctx: HcpContext,
-  spoken: string,
-): Promise<string | null> {
-  const said = normaliseName(spoken);
-  if (!said) return null;
-
-  let entry = leadSourceCache.get(ctx.tenantId);
-  if (!entry || Date.now() - entry.at >= LEAD_SOURCE_TTL_MS) {
-    const res = await listLeadSources(ctx);
-    entry = { names: (res.lead_sources ?? []).map(x => x.name).filter(Boolean), at: Date.now() };
-    leadSourceCache.set(ctx.tenantId, entry);
-  }
-
-  const hits = entry.names.filter(n => normaliseName(n) === said);
-  return hits.length === 1 ? hits[0] : null;
-}
-
-/** Test seam — drops the per-tenant name cache. */
-export function clearLeadSourceCache(): void {
-  leadSourceCache.clear();
-}
 
 /**
  * Creates the lead, and retries once without `lead_source` when HCP rejects the
@@ -170,16 +134,15 @@ export async function handleCreateLead(
   // the office reads it.
   const spokenLeadSource = (args.lead_source as string | undefined)?.trim() || null;
 
-  // The caller's answer is only usable as attribution when it IS one of the
-  // account's configured names — exact match, ignoring case and spacing. No
-  // fuzzy guessing: a name HCP doesn't know is dropped by HCP without a word,
-  // so a guess shows up as no attribution at all.
-  const matchedSpoken =
-    !session.leadSourceName && spokenLeadSource
-      ? await matchConfiguredLeadSource(ctx, spokenLeadSource).catch(() => null)
-      : null;
-
-  const leadSource = session.leadSourceName ?? matchedSpoken ?? AGENT_LEAD_SOURCE;
+  // The spoken answer is deliberately NOT used as attribution, even when it
+  // names a configured source exactly.
+  //
+  // On call_69ba94bf the agent sent lead_source "Google" having never asked the
+  // question — the caller said no such thing. An invented answer written into
+  // HCP's lead_source is marketing data Laura would act on; the same answer in
+  // the note is visibly a note. Only the dialed tracking line, which is a fact
+  // about which number rang, is trusted as attribution.
+  const leadSource = session.leadSourceName ?? AGENT_LEAD_SOURCE;
 
   if (spokenLeadSource) {
     note += `\nHeard about us :- ${spokenLeadSource}`;
