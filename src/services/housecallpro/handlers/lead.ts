@@ -23,7 +23,6 @@ import { insertLead } from '../db/leads.js';
 import { getCustomerByHcpId } from '../db/customers.js';
 import { resolveJobTypeName, resolveJobTypeUuid } from '../db/jobTypes.js';
 import { resolveLeadSource } from '../db/leadSources.js';
-import { matchLeadSource } from '../leadSourceMatch.js';
 import { setLeadCreated, setSelectedSlot } from '../db/callsessions.js';
 import { sendHcpNotification } from '../emailNotificationService.js';
 import type {
@@ -32,6 +31,13 @@ import type {
   HcpCreateLeadInput,
   RetellFunctionResult,
 } from '../types.js';
+
+/**
+ * Lead source stamped on a lead whose attribution came from the caller rather
+ * than the dialed tracking line. Must exist in the tenant's HCP lead sources;
+ * if it doesn't, HCP rejects the name and the lead is retried without it.
+ */
+const AGENT_LEAD_SOURCE = 'Clara';
 
 /**
  * Creates the lead, and retries once without `lead_source` when HCP rejects the
@@ -98,37 +104,25 @@ export async function handleCreateLead(
 
   // Attribution. `lead_source` is a lead-source NAME, not an id: HCP looks the
   // string up among the account's configured lead sources and rejects the whole
-  // lead with 400 "Lead source not found" when it doesn't match. So nothing
-  // unverified is ever sent — and never an `lsrc_…` id.
+  // lead with 400 "Lead source not found" when it doesn't match. So only a name
+  // the account actually has is ever sent — and never an `lsrc_…` id.
   //
   // The dialed tracking line is the authority: it is a fact about which number
-  // rang, captured at call_started, and it beats anything said on the call. The
-  // caller is only asked when that line maps to nothing (customer_lookup returns
-  // ask_lead_source), and their free text then has to be narrowed to a configured
-  // name before it can be sent.
+  // rang, captured at call_started, and it beats anything said on the call.
+  //
+  // When that line maps to nothing, Clara asks the caller instead. Their answer
+  // is free text and cannot be trusted as an HCP name, so the attribution is
+  // stamped with AGENT_LEAD_SOURCE — one fixed name meaning "the agent collected
+  // this" — and their actual words go on the note where the office reads them.
   const dialedLead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber)
     .catch(() => null);
   const dialedName = dialedLead?.leadName ?? null;
 
   const spokenLeadSource = (args.lead_source as string | undefined)?.trim() || null;
-  // Only consult the account's name list when the tracking line left a gap to fill.
-  const matchedSpoken =
-    !dialedName && spokenLeadSource
-      ? await matchLeadSource(ctx, spokenLeadSource).catch(() => null)
-      : null;
-  const leadSource = dialedName ?? matchedSpoken;
+  const leadSource = dialedName ?? (spokenLeadSource ? AGENT_LEAD_SOURCE : null);
 
-  // The caller's own words stay on the lead whenever they gave them — including
-  // when the tracking line already decided the attribution, since the two can
-  // disagree and the office should see both.
   if (spokenLeadSource) {
     note += `\nHeard about us :- ${spokenLeadSource}`;
-    if (!dialedName && !matchedSpoken) {
-      console.warn('[hcp] create_lead spoken lead source matched nothing', {
-        sessionId: session.sessionId,
-        spokenLeadSource,
-      });
-    }
   }
 
   const body: HcpCreateLeadInput = {

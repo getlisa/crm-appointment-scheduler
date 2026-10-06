@@ -27,9 +27,6 @@ vi.mock('../../src/services/housecallpro/db/jobTypes.js', () => ({
 vi.mock('../../src/services/housecallpro/db/leadSources.js', () => ({
   resolveLeadSource: vi.fn(),
 }));
-vi.mock('../../src/services/housecallpro/leadSourceMatch.js', () => ({
-  matchLeadSource: vi.fn(),
-}));
 vi.mock('../../src/services/housecallpro/db/callsessions.js', () => ({
   setLeadCreated: vi.fn().mockResolvedValue(undefined),
   setSelectedSlot: vi.fn().mockResolvedValue(undefined),
@@ -43,7 +40,6 @@ import { createLead } from '../../src/services/housecallpro/client.js';
 import { insertLead } from '../../src/services/housecallpro/db/leads.js';
 import { resolveJobTypeUuid, resolveJobTypeName } from '../../src/services/housecallpro/db/jobTypes.js';
 import { resolveLeadSource } from '../../src/services/housecallpro/db/leadSources.js';
-import { matchLeadSource } from '../../src/services/housecallpro/leadSourceMatch.js';
 import { setLeadCreated } from '../../src/services/housecallpro/db/callsessions.js';
 import { sendHcpNotification } from '../../src/services/housecallpro/emailNotificationService.js';
 import type {
@@ -57,7 +53,6 @@ const insertLeadMock = insertLead as unknown as Mock;
 const resolveJobTypeUuidMock = resolveJobTypeUuid as unknown as Mock;
 const resolveJobTypeNameMock = resolveJobTypeName as unknown as Mock;
 const resolveLeadSourceMock = resolveLeadSource as unknown as Mock;
-const matchLeadSourceMock = matchLeadSource as unknown as Mock;
 const setLeadCreatedMock = setLeadCreated as unknown as Mock;
 const sendHcpNotificationMock = sendHcpNotification as unknown as Mock;
 
@@ -100,7 +95,6 @@ beforeEach(() => {
   resolveJobTypeUuidMock.mockResolvedValue(null);
   resolveJobTypeNameMock.mockResolvedValue(null);
   resolveLeadSourceMock.mockResolvedValue(null);
-  matchLeadSourceMock.mockResolvedValue(null);
 });
 
 describe('handleCreateLead — lead-only intake', () => {
@@ -186,9 +180,8 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(body.note).toBe('Issue Description :- Something is buzzing behind the wall');
   });
 
-  it('sends the configured name the caller\'s words matched, not the words', async () => {
+  it('stamps Clara as the source when the caller was asked, keeping their words on the note', async () => {
     resolveLeadSourceMock.mockResolvedValue(null); // tracking line maps to nothing
-    matchLeadSourceMock.mockResolvedValue('neighbor');
 
     await handleCreateLead(makeSession(), ctx, {
       service_type: 'Electrical Repair',
@@ -196,10 +189,9 @@ describe('handleCreateLead — lead-only intake', () => {
       lead_source: 'my neighbour used you last year',
     });
 
-    expect(matchLeadSourceMock).toHaveBeenCalledWith(ctx, 'my neighbour used you last year');
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
-    expect(body.lead_source).toBe('neighbor');
-    // ...and the caller's own words survive on the lead.
+    // The answer is free text and cannot be trusted as an HCP name.
+    expect(body.lead_source).toBe('Clara');
     expect(body.note).toContain('Heard about us :- my neighbour used you last year');
   });
 
@@ -216,24 +208,18 @@ describe('handleCreateLead — lead-only intake', () => {
 
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
     expect(body.lead_source).toBe('Google Local Services Vallejo');
-    // The spoken answer is not consulted at all when the line resolved.
-    expect(matchLeadSourceMock).not.toHaveBeenCalled();
     // It is still recorded, because the two disagreeing is worth seeing.
     expect(body.note).toContain('Heard about us :- I saw your van');
   });
 
-  it('keeps the words on the lead but sends no lead_source when nothing matches', async () => {
+  it('sends no lead_source at all when the line is unmapped and nobody was asked', async () => {
     resolveLeadSourceMock.mockResolvedValue(null);
-    matchLeadSourceMock.mockResolvedValue(null);
 
-    const res = await handleCreateLead(makeSession(), ctx, {
-      issue: 'Breaker keeps tripping',
-      lead_source: 'the guy who did my panel',
-    });
+    const res = await handleCreateLead(makeSession(), ctx, { issue: 'Breaker keeps tripping' });
 
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
     expect('lead_source' in body).toBe(false);
-    expect(body.note).toContain('Heard about us :- the guy who did my panel');
+    expect(body.note).not.toContain('Heard about us');
     expect(JSON.parse(res.result).status).toBe('created');
   });
 
