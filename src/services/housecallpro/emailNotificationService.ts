@@ -3,14 +3,15 @@
  * Recipients come from housecallpro_tokens.emailto (to) and ccMail (cc).
  *
  * Silently skips when SENDGRID_API_KEY is missing or there are no recipients.
- * Two kinds:
- *   job_booked  — Office-Hours booked a job (green)
- *   escalation  — After-Hours captured a request / handoff (orange)
+ * Three kinds:
+ *   job_booked   — Office-Hours booked a job (green)
+ *   lead_created — Office-Hours logged a lead, nothing scheduled (blue)
+ *   escalation   — After-Hours captured a request / handoff (orange)
  */
 
 const SENDGRID_API = 'https://api.sendgrid.com/v3/mail/send';
 
-export type HcpNotificationKind = 'job_booked' | 'escalation';
+export type HcpNotificationKind = 'job_booked' | 'lead_created' | 'escalation';
 
 export interface HcpNotificationDetails {
   customerName?: string | null;
@@ -22,6 +23,10 @@ export interface HcpNotificationDetails {
   notes?: string | null;
   jobNumber?: string | null;
   jobId?: string | null;
+  /** HCP job type the agent classified on a lead (name, not uuid). */
+  jobType?: string | null;
+  leadNumber?: number | null;
+  leadId?: string | null;
   escalationType?: string | null;
   summary?: string | null;
 }
@@ -54,29 +59,48 @@ export async function sendHcpNotification({
 
   const from = { email: process.env.SENDER_MAIL ?? 'noreply@justclara.ai', name: 'Clara AI' };
 
-  const isBooked = kind === 'job_booked';
-  const subject = isBooked
-    ? `New Job Booked — ${details.customerName ?? 'Customer'}${details.jobNumber ? ` | #${details.jobNumber}` : ''}`
-    : `Service Request — ${details.customerName ?? 'Caller'}${details.escalationType ? ` (${details.escalationType})` : ''}`;
+  // A lead is deliberately NOT a booking — the subject and badge have to say so
+  // at a glance, because nothing about it is scheduled.
+  const leadNo = details.leadNumber != null ? String(details.leadNumber) : '';
+  const subject =
+    kind === 'job_booked'
+      ? `New Job Booked — ${details.customerName ?? 'Customer'}${details.jobNumber ? ` | #${details.jobNumber}` : ''}`
+      : kind === 'lead_created'
+        ? `New Lead — ${details.customerName ?? 'Customer'}${leadNo ? ` | #${leadNo}` : ''}`
+        : `Service Request — ${details.customerName ?? 'Caller'}${details.escalationType ? ` (${details.escalationType})` : ''}`;
 
-  const rows: [string, string][] = isBooked
-    ? [
-        ['Customer', details.customerName || '—'],
-        ['Callback Number', details.callbackNumber || 'Not provided'],
-        ['Service Address', details.address || 'Not provided'],
-        ['Notes', details.notes || 'None'],
-        ['Job Number', details.jobNumber || '—'],
-      ]
-    : [
-        ['Caller', details.customerName || '—'],
-        ['Callback Number', details.callbackNumber || 'Not provided'],
-        ...((details.address ? [['Service Address', details.address]] : []) as [string, string][]),
-        ['Type', details.escalationType || 'General'],
-        ['Notes', details.notes || details.summary || 'Not provided'],
-      ];
+  const rows: [string, string][] =
+    kind === 'job_booked'
+      ? [
+          ['Customer', details.customerName || '—'],
+          ['Callback Number', details.callbackNumber || 'Not provided'],
+          ['Service Address', details.address || 'Not provided'],
+          ['Notes', details.notes || 'None'],
+          ['Job Number', details.jobNumber || '—'],
+        ]
+      : kind === 'lead_created'
+        ? [
+            ['Customer', details.customerName || '—'],
+            ['Callback Number', details.callbackNumber || 'Not provided'],
+            ['Service Address', details.address || 'Not provided'],
+            ['Job Type', details.jobType || 'Not classified'],
+            ['Notes', details.notes || 'None'],
+            ['Lead Number', leadNo || '—'],
+          ]
+        : [
+            ['Caller', details.customerName || '—'],
+            ['Callback Number', details.callbackNumber || 'Not provided'],
+            ...((details.address ? [['Service Address', details.address]] : []) as [string, string][]),
+            ['Type', details.escalationType || 'General'],
+            ['Notes', details.notes || details.summary || 'Not provided'],
+          ];
+
+  const badge =
+    kind === 'job_booked' ? 'Job Booked' : kind === 'lead_created' ? 'Lead — Not Scheduled' : 'Service Request';
+  const badgeColor = kind === 'job_booked' ? '#2e7d32' : kind === 'lead_created' ? '#1565c0' : '#e65100';
 
   const text = rows.map(([k, v]) => `${k}: ${v}`).join('\n');
-  const html = composeHtml(isBooked ? 'Job Booked' : 'Service Request', isBooked ? '#2e7d32' : '#e65100', rows);
+  const html = composeHtml(badge, badgeColor, rows);
 
   const body = {
     personalizations: [{ to: to.map(email => ({ email })), ...(cc.length ? { cc: cc.map(email => ({ email })) } : {}) }],

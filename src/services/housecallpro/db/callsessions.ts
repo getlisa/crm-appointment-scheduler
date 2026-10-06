@@ -28,6 +28,9 @@ function mapRow(row: Record<string, unknown>): HcpCallSessionRow {
     selectedTechnicianId: (row.selected_technician_id as string | null) ?? null,
     housecallproJobId: (row.housecallpro_job_id as string | null) ?? null,
     housecallproJobNumber: (row.housecallpro_job_number as string | null) ?? null,
+    housecallproLeadId: (row.housecallpro_lead_id as string | null) ?? null,
+    housecallproLeadNumber: (row.housecallpro_lead_number as number | null) ?? null,
+    jobTypeUuid: (row.job_type_uuid as string | null) ?? null,
     escalationType: (row.escalation_type as string | null) ?? null,
     escalationSummary: (row.escalation_summary as string | null) ?? null,
     status: (row.status as HcpCallStatus) ?? 'active',
@@ -179,6 +182,24 @@ export async function setJobCreated(
       housecallpro_job_id: jobId,
       housecallpro_job_number: jobNumber,
       status: 'job_created',
+    })
+    .eq('session_id', sessionId);
+}
+
+/** Records the HCP lead create_lead just logged (Pierce's lead-only intake). */
+export async function setLeadCreated(
+  sessionId: string,
+  leadId: string,
+  leadNumber: number | null,
+  jobTypeUuid: string | null,
+): Promise<void> {
+  await supabase
+    .from('housecallpro_callsessions')
+    .update({
+      housecallpro_lead_id: leadId,
+      housecallpro_lead_number: leadNumber,
+      job_type_uuid: jobTypeUuid,
+      status: 'lead_created',
     })
     .eq('session_id', sessionId);
 }

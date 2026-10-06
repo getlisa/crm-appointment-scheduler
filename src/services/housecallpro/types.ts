@@ -119,6 +119,36 @@ export interface HcpCreateJobInput {
   notes?: string;
 }
 
+/**
+ * Body sent to POST /leads (create lead).
+ *
+ * Field names verified against Pierce Electric's live account on 2026-09-30:
+ *   - `note` is SINGULAR. A `notes` key is accepted by the API and then silently
+ *     dropped — it never reaches the lead's Private Notes.
+ *   - `job_type_uuid` is TOP LEVEL. The `job_fields.job_type_uuid` shape appears
+ *     in the response but is ignored on write.
+ *   - A lead always needs a customer: `customer_id` here, or an inline customer
+ *     object we deliberately don't use (create_customer runs first so the
+ *     customer is in our cache before the session can reference it).
+ */
+export interface HcpCreateLeadInput {
+  customer_id: string;
+  address_id?: string;
+  note?: string;
+  job_type_uuid?: string;
+  tags?: string[];
+  lead_source?: string;
+}
+
+/** POST /leads response (loose — only the fields we read/persist are typed). */
+export interface HcpLeadResponse {
+  id: string;
+  number?: number | null;
+  lead_source?: string | null;
+  job_fields?: { job_type_uuid?: string | null; business_unit_uuid?: string | null } | null;
+  [key: string]: unknown;
+}
+
 /** POST /jobs response (loose — only the fields we read/persist are typed). */
 export interface HcpJobResponse {
   id: string;
@@ -178,6 +208,7 @@ export interface HcpCustomerRow {
 export type HcpCallStatus =
   | 'active'
   | 'job_created'
+  | 'lead_created'
   | 'escalated'
   | 'handed_off'
   | 'ended'
@@ -213,6 +244,11 @@ export interface HcpCallSessionRow {
   selectedTechnicianId: string | null;
   housecallproJobId: string | null;
   housecallproJobNumber: string | null;
+  /** HCP lead (lea_...) created by create_lead — Pierce's lead-only intake. */
+  housecallproLeadId: string | null;
+  housecallproLeadNumber: number | null;
+  /** HCP job type (jbt_...) the agent classified, resolved from housecallpro_job_types. */
+  jobTypeUuid: string | null;
   escalationType: string | null;
   escalationSummary: string | null;
   status: HcpCallStatus;

@@ -36,6 +36,7 @@ import {
   handleCreateAddress,
 } from '../services/housecallpro/handlers/customer.js';
 import { handleBookJob } from '../services/housecallpro/handlers/job.js';
+import { handleCreateLead } from '../services/housecallpro/handlers/lead.js';
 import { handleEscalate } from '../services/housecallpro/handlers/escalate.js';
 import type { HcpContext, HcpCallStatus, HcpCallSessionRow } from '../services/housecallpro/types.js';
 import type { Request, Response } from 'express';
@@ -544,6 +545,9 @@ router.post('/fn/create_customer', fnRoute('create_customer', ({ session, ctx },
 router.post('/fn/match_address', fnRoute('match_address', ({ session, ctx }, args) => handleMatchAddress(session, ctx, args)));
 router.post('/fn/create_address', fnRoute('create_address', ({ session, ctx }, args) => handleCreateAddress(session, ctx, args)));
 router.post('/fn/book_job', fnRoute('book_job', ({ session, ctx }, args) => handleBookJob(session, ctx, args)));
+// Pierce Electric is lead-only: its Office Hours agent calls create_lead instead
+// of book_job. Both stay registered — Zephyr still books jobs.
+router.post('/fn/create_lead', fnRoute('create_lead', ({ session, ctx }, args) => handleCreateLead(session, ctx, args)));
 router.post('/fn/escalate', fnRoute('escalate', ({ session, ctx }, args) => handleEscalate(session, ctx, args)));
 
 export default router;
