@@ -121,17 +121,11 @@ async function syncTenantPage(supabase: SupabaseClient, t: TokenRow): Promise<Re
   const items = data.customers ?? [];
   const totalPages = data.total_pages ?? 1;
 
-  // Dirty detection: compare API updated_at vs cached housecallpro_updated_at.
-  // Scoped to the ids on THIS page — a tenant-wide select would hit PostgREST's
-  // default 1000-row cap, making every row past it look uncached and re-upsert forever.
-  const pageIds = items.map(c => c.id);
-  const { data: dbRows, error: dbErr } = pageIds.length
-    ? await supabase
-        .from('housecallpro_customers')
-        .select('housecallpro_customer_id, housecallpro_updated_at')
-        .eq('tenant_id', tenantId)
-        .in('housecallpro_customer_id', pageIds)
-    : { data: [], error: null };
+  // Dirty detection: compare API updated_at vs cached housecallpro_updated_at
+  const { data: dbRows, error: dbErr } = await supabase
+    .from('housecallpro_customers')
+    .select('housecallpro_customer_id, housecallpro_updated_at')
+    .eq('tenant_id', tenantId);
   if (dbErr) throw new Error(`dbCustomerMap query: ${dbErr.message}`);
   const cachedMap = new Map(
     (dbRows ?? []).map((r: { housecallpro_customer_id: string; housecallpro_updated_at: string | null }) => [
@@ -140,17 +134,9 @@ async function syncTenantPage(supabase: SupabaseClient, t: TokenRow): Promise<Re
     ]),
   );
 
-  // Compare as instants, not strings: HCP sends "2026-09-23T14:32:31Z" while
-  // Postgres hands the timestamptz back as "2026-09-23T14:32:31+00:00". Equal
-  // moments, different text — a string compare marks every row dirty forever.
-  const instant = (v: string | null | undefined): number => {
-    const t = v ? Date.parse(v) : NaN;
-    return Number.isNaN(t) ? -1 : t;
-  };
-
   const dirty = items.filter(c => {
     const cached = cachedMap.get(c.id);
-    return cached === undefined || instant(cached) !== instant(c.updated_at);
+    return cached === undefined || cached !== (c.updated_at ?? '');
   });
 
   if (dirty.length > 0) {

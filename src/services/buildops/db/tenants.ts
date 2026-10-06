@@ -58,25 +58,3 @@ export async function resolveByTenantId(buildopsTenantId: string): Promise<Resol
     email_to: (data.email_to as string[] | null) ?? [],
   };
 }
-
-/**
- * Writes a freshly minted access token onto the tenant row.
- * Matched by the BuildOps tenant UUID, so a login for an unregistered tenant persists nothing.
- *
- * @param buildopsTenantId - BuildOps internal tenant UUID
- * @param accessToken      - Fresh Bearer token from the BuildOps auth endpoint
- * @returns The tenant's E.164 inbound number when a row was updated, or null when no row matched
- */
-export async function saveAccessToken(
-  buildopsTenantId: string,
-  accessToken: string,
-): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('buildops_tenants')
-    .update({ access_token: accessToken })
-    .eq('buildops_tenant_id', buildopsTenantId)
-    .select('no');
-
-  if (error) throw new Error(`saveAccessToken: ${error.message}`);
-  return data?.[0]?.no ?? null;
-}
