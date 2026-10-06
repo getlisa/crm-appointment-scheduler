@@ -197,6 +197,8 @@ export async function handleCreateLead(
           city: city!,
           state: state!,
           zip: zip!,
+          // HCP rejects an address with 422 "Country is required" without this.
+          country: (args.country as string | undefined)?.trim() || 'US',
         }).catch((err) => {
           console.warn('[hcp] create_lead could not save the address on the new customer', {
             sessionId: session.sessionId,
@@ -255,6 +257,19 @@ export async function handleCreateLead(
         leadId: lead.id,
       },
     }).catch(() => undefined);
+
+    // POST /leads does NOT reject an unconfigured lead source the way POST /jobs
+    // does — it accepts the request and returns the lead with lead_source null.
+    // The retry above can therefore never fire for that case, so compare what came
+    // back: a mismatch means the name is missing from the account's lead sources.
+    if (leadSource && lead.lead_source !== leadSource) {
+      console.warn('[hcp] create_lead lead source silently dropped by HCP — not configured on the account', {
+        sessionId: session.sessionId,
+        leadId: lead.id,
+        sent: leadSource,
+        returned: lead.lead_source ?? null,
+      });
+    }
 
     console.log('[hcp] create_lead created', {
       sessionId: session.sessionId,

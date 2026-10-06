@@ -356,11 +356,13 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(body.address).toEqual({ street: '18 Oak Street', city: 'Vallejo', state: 'CA', zip: '94590' });
 
     // The inline address is text on the lead only, so a real one is created after.
+    // country is mandatory — HCP 422s "Country is required" without it.
     expect(createAddressMock).toHaveBeenCalledWith(ctx, 'cus_new', {
       street: '18 Oak Street',
       city: 'Vallejo',
       state: 'CA',
       zip: '94590',
+      country: 'US',
     });
     // ...and the caller must be cached, or customer_lookup misses them next time.
     expect(upsertCustomerMock).toHaveBeenCalledWith('tenant-1', expect.objectContaining({ id: 'cus_new' }));
