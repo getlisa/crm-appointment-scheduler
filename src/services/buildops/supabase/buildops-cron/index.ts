@@ -331,35 +331,6 @@ async function batchInsert(supabase: SupabaseClient, table: string, rows: object
   }
 }
 
-/**
- * Every buildops_customer_id currently stored for this tenant.
- *
- * buildops_properties.customer_id is a foreign key to this column, but customers
- * sync one page at a time, so the properties endpoint routinely returns properties
- * whose parent customer is not in the DB yet. Those rows must be filtered out before
- * upsert — otherwise the insert raises a FK violation that aborts the invocation
- * before sync_customer_page can advance, and every subsequent run fails identically.
- *
- * Paged explicitly: PostgREST caps an unpaged select at 1000 rows, and a short set
- * here would silently skip valid properties.
- */
-async function fetchKnownCustomerIds(supabase: SupabaseClient, tenantId: string): Promise<Set<string>> {
-  const ids = new Set<string>();
-  const SELECT_PAGE = 1000;
-  for (let from = 0; ; from += SELECT_PAGE) {
-    const { data, error } = await supabase
-      .from('buildops_customers')
-      .select('buildops_customer_id')
-      .eq('tenant_id', tenantId)
-      .range(from, from + SELECT_PAGE - 1);
-    if (error) throw new Error(`known customer IDs query: ${error.message}`);
-    const rows = (data ?? []) as { buildops_customer_id: string }[];
-    for (const r of rows) ids.add(r.buildops_customer_id);
-    if (rows.length < SELECT_PAGE) break;
-  }
-  return ids;
-}
-
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (_req: Request) => {
@@ -385,24 +356,10 @@ Deno.serve(async (_req: Request) => {
       const { error: tokenErr } = await supabase.from('buildops_tenants').update({ access_token: token }).eq('no', inboundPhone);
       if (tokenErr) throw new Error(`token update for ${inboundPhone}: ${tokenErr.message}`);
 
-      // Always upsert all properties first — fast, no rep fetches, stays fresh even if later steps fail.
-      // Properties whose parent customer is not in the DB yet are held back (FK constraint) and land
-      // on a later run once their customer page syncs. A property failure must never abort the run:
-      // the page cursor only advances below, so throwing here would freeze the sync permanently.
+      // Always upsert all properties first — fast, no rep fetches, stays fresh even if later steps fail
       const { properties, propMap, propPhoneMap } = await fetchAllProperties(token, tenantId);
       const allPropertyRows = properties.filter(p => p.customerId).map(buildPropertyRow);
-      const knownCustomerIds = await fetchKnownCustomerIds(supabase, tenantId);
-      const insertableRows = allPropertyRows.filter(r => knownCustomerIds.has(r.customer_id as string));
-      const heldBack = allPropertyRows.length - insertableRows.length;
-      let propertyError: string | null = null;
-      if (insertableRows.length > 0) {
-        try {
-          await batchUpsert(supabase, 'buildops_properties', insertableRows, 'id');
-        } catch (err) {
-          propertyError = err instanceof Error ? err.message : String(err);
-          console.warn(`property upsert (non-fatal): ${propertyError}`);
-        }
-      }
+      if (allPropertyRows.length > 0) await batchUpsert(supabase, 'buildops_properties', allPropertyRows, 'id');
 
       let result: Record<string, unknown>;
 
@@ -419,13 +376,7 @@ Deno.serve(async (_req: Request) => {
           .eq('no', inboundPhone);
       }
 
-      results.push({
-        tenant: inboundPhone,
-        properties_synced: propertyError ? 0 : insertableRows.length,
-        properties_awaiting_customer: heldBack,
-        ...(propertyError ? { property_upsert_error: propertyError } : {}),
-        ...result,
-      });
+      results.push({ tenant: inboundPhone, properties_synced: allPropertyRows.length, ...result });
     }
 
     return new Response(
