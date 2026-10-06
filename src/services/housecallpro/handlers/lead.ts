@@ -17,12 +17,12 @@
  *   `note` is singular, and `job_type_uuid` is top level.
  */
 
-import { createLead } from '../client.js';
+import { createAddress, createLead } from '../client.js';
 import { resolveNotes } from '../requestNotes.js';
 import { insertLead } from '../db/leads.js';
-import { getCustomerByHcpId } from '../db/customers.js';
+import { getCustomerByHcpId, upsertCustomer } from '../db/customers.js';
 import { resolveJobTypeName, resolveJobTypeUuid } from '../db/jobTypes.js';
-import { setLeadCreated, setSelectedSlot } from '../db/callsessions.js';
+import { setLeadCreated, setMatchedCustomer, setSelectedSlot } from '../db/callsessions.js';
 import { sendHcpNotification } from '../emailNotificationService.js';
 import type {
   HcpCallSessionRow,
@@ -68,16 +68,32 @@ export async function handleCreateLead(
   args: Record<string, unknown>,
 ): Promise<RetellFunctionResult> {
   const customerId = session.housecallproCustomerId;
-  if (!customerId) {
-    return { result: 'error: no customer identified — complete lookup or create the customer first' };
+
+  // A new caller has no customer yet: HCP creates one from an inline object as a
+  // side effect of the lead, which is why there is no separate create_customer step.
+  const firstName = (args.first_name as string | undefined)?.trim();
+  const lastName = (args.last_name as string | undefined)?.trim();
+  if (!customerId && !firstName && !lastName) {
+    return { result: 'error: no customer — identify the caller first, or pass first_name and last_name' };
   }
 
   const addressId =
     (args.address_id as string | undefined)?.trim() ||
     session.serviceAddressMap?.selectedAddressId ||
     undefined;
-  if (!addressId) {
-    return { result: 'error: no address selected — call match_address or create_address first' };
+
+  const street = (args.street as string | undefined)?.trim();
+  const city = (args.city as string | undefined)?.trim();
+  const state = (args.state as string | undefined)?.trim();
+  const zip = (args.zip as string | undefined)?.trim();
+  const hasInlineAddress = Boolean(street && city && state && zip);
+
+  if (!addressId && !hasInlineAddress) {
+    return {
+      result: customerId
+        ? 'error: no address selected — call match_address or create_address first'
+        : 'error: no address — pass street, city, state and zip',
+    };
   }
 
   // A lead carries no schedule in HCP, so the caller's part-of-day preference is
@@ -123,8 +139,25 @@ export async function handleCreateLead(
   }
 
   const body: HcpCreateLeadInput = {
-    customer_id: customerId,
-    address_id: addressId,
+    ...(customerId
+      ? { customer_id: customerId }
+      : {
+          customer: {
+            ...(firstName ? { first_name: firstName } : {}),
+            ...(lastName ? { last_name: lastName } : {}),
+            ...((args.email as string | undefined)?.trim()
+              ? { email: (args.email as string).trim() }
+              : {}),
+            mobile_number:
+              (args.mobile_number as string | undefined)?.trim() || session.caller,
+            ...((args.company as string | undefined)?.trim()
+              ? { company: (args.company as string).trim() }
+              : {}),
+          },
+        }),
+    ...(addressId
+      ? { address_id: addressId }
+      : { address: { street: street!, city: city!, state: state!, zip: zip! } }),
     note,
     tags: ['Clara'],
     ...(jobTypeUuid ? { job_type_uuid: jobTypeUuid } : {}),
@@ -139,11 +172,54 @@ export async function handleCreateLead(
     const lead = await createLeadTolerantOfLeadSource(ctx, body, session.sessionId);
     const leadNumber = typeof lead.number === 'number' ? lead.number : null;
 
+    // HCP created the customer as a side effect. Adopt it before anything else:
+    // housecallpro_leads has a foreign key onto the customer cache, and
+    // customer_lookup reads that cache, so without this the caller is a stranger
+    // on their next call and gets a duplicate.
+    let effectiveCustomerId = customerId;
+    let savedAddressId: string | null = addressId ?? null;
+    if (!effectiveCustomerId && lead.customer?.id) {
+      effectiveCustomerId = lead.customer.id;
+      await upsertCustomer(session.tenantId, lead.customer).catch(() => null);
+      const createdName = [lead.customer.first_name, lead.customer.last_name]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      await setMatchedCustomer(session.sessionId, lead.customer.id, createdName, 'new_customer')
+        .catch(() => undefined);
+
+      // The inline `address` lives on the lead as text only — HCP saves no
+      // customer address record for it. Create one so the office has a real
+      // address to dispatch to when the lead is converted.
+      if (hasInlineAddress) {
+        const addr = await createAddress(ctx, lead.customer.id, {
+          street: street!,
+          city: city!,
+          state: state!,
+          zip: zip!,
+        }).catch((err) => {
+          console.warn('[hcp] create_lead could not save the address on the new customer', {
+            sessionId: session.sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return null;
+        });
+        savedAddressId = addr?.id ?? null;
+      }
+    }
+
+    if (!effectiveCustomerId) {
+      console.error('[hcp] create_lead has no customer id to persist', {
+        sessionId: session.sessionId,
+        leadId: lead.id,
+      });
+    }
+
     await insertLead(session.tenantId, {
       housecallproLeadId: lead.id,
       leadNumber,
-      housecallproCustomerId: customerId,
-      addressId,
+      housecallproCustomerId: effectiveCustomerId!,
+      addressId: savedAddressId,
       jobTypeUuid,
       sessionId: session.sessionId,
       requestedStart,
@@ -160,7 +236,9 @@ export async function handleCreateLead(
     }
 
     // Best-effort notification
-    const customer = await getCustomerByHcpId(session.tenantId, customerId).catch(() => null);
+    const customer = effectiveCustomerId
+      ? await getCustomerByHcpId(session.tenantId, effectiveCustomerId).catch(() => null)
+      : null;
     sendHcpNotification({
       kind: 'lead_created',
       emailTo: ctx.emailTo,
@@ -168,7 +246,9 @@ export async function handleCreateLead(
       details: {
         customerName: session.customerName ?? customer?.name ?? null,
         callbackNumber: session.caller,
-        address: session.serviceAddressMap?.addresses?.[addressId]?.formatted ?? null,
+        address:
+          (addressId ? session.serviceAddressMap?.addresses?.[addressId]?.formatted : null) ??
+          (hasInlineAddress ? `${street}, ${city}, ${state} ${zip}` : null),
         notes: note, // the same Service / Issue Description / timeframe block sent to HCP
         jobType: jobTypeName,
         leadNumber,

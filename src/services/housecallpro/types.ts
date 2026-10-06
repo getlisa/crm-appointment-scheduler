@@ -132,8 +132,31 @@ export interface HcpCreateJobInput {
  *     customer is in our cache before the session can reference it).
  */
 export interface HcpCreateLeadInput {
-  customer_id: string;
+  /** An existing customer. Mutually exclusive with `customer`. */
+  customer_id?: string;
+  /**
+   * A new customer, created as a side effect of the lead. HCP returns the full
+   * customer on the response, but does NOT apply `tags`, `lead_source` or
+   * `notes` to it, and does not save `address` as a customer address record —
+   * verified 2026-10-06 against lead #136.
+   */
+  customer?: {
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    mobile_number?: string;
+    company?: string;
+  };
+  /** An address already on the customer. Mutually exclusive with `address`. */
   address_id?: string;
+  /** Address text stored on the lead only — it creates no customer address. */
+  address?: {
+    street?: string;
+    street_line_2?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+  };
   note?: string;
   job_type_uuid?: string;
   tags?: string[];
@@ -153,6 +176,7 @@ export interface HcpLeadSourcesListResponse {
 export interface HcpLeadResponse {
   id: string;
   number?: number | null;
+  customer?: HcpApiCustomer | null;
   lead_source?: string | null;
   job_fields?: { job_type_uuid?: string | null; business_unit_uuid?: string | null } | null;
   [key: string]: unknown;

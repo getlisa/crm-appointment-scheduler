@@ -16,7 +16,7 @@ Last verified: 2026-10-05 against the Retell agent exports in `retell/`, the bac
 
 | Tenant | Agent | Version | Dialed number | Tools | Writes to HCP |
 |---|---|---|---|---|---|
-| Pierce Electric | Office Hours | v6 (`llm_07d012403bf79a92a2eddd9dbd8c`) | +1 707 622 3573 | `customer_lookup`, `lookup_customer_fuzzy`, `confirm_customer`, `create_customer`, `match_address`, `create_address`, `book_job`, `set_job_type`, `create_lead`, `end_call` | customer, address, lead |
+| Pierce Electric | Office Hours | v6 (`llm_07d012403bf79a92a2eddd9dbd8c`) | +1 707 622 3573 | `customer_lookup`, `lookup_customer_fuzzy`, `confirm_customer`, `match_address`, `create_address`, `book_job`, `set_job_type`, `create_lead`, `end_call` | customer, address, lead |
 | Pierce Electric | After Hours | v5 (`llm_70dd7b08d0431b4ba1bc8a016071`) | same line, after-hours routing | `escalate`, `end_call` | none |
 | Zephyr Heating and Air | Office Hours | v3 (`llm_5b93a87bda2d0ebba94d5f96708c`) | +1 747 837 3403 | same eight tools as Pierce Office Hours | customer, address, job |
 | Zephyr Heating and Air | After Hours | v3 (`llm_1cf81c06aa11ad26685369ac33b6`) | same line, after-hours routing | `escalate`, `end_call` | none |
@@ -350,6 +350,23 @@ The Pierce Office Hours agent carries both `book_job` and `create_lead`. Nothing
 - The prompt rules it out twice: in the HCP section (`prompt.md:293`) and in the CORE RULE block (`prompt.md:495`).
 
 If a Pierce job ever appears from a Clara call, this is the thing that failed — check the Retell transcript for a `book_job` invocation before looking anywhere else.
+
+### 7.5 Inline customer and address, probed live 2026-10-06 (lead #136)
+
+Pierce has no `create_customer` step: a new caller's record is created by `POST /leads` from an inline `customer` object. What that costs, measured by reading the created customer back:
+
+| | create_customer + create_address | inline customer on the lead |
+|---|---|---|
+| Customer created | yes | yes |
+| Addresses on the customer | yes | **0** |
+| Customer `lead_source` | set | **null** |
+| Customer `tags` | `["Clara"]` | **`[]`** |
+| Customer notes | "Created by Clara on …" | **null** |
+| In the Supabase cache | immediately | **not at all** |
+
+An inline `address` is accepted and shows on the lead, but comes back with `"id": null` — it is text on the lead, not a customer address record.
+
+`handlers/lead.ts` compensates for the two that matter: it upserts the returned customer into `housecallpro_customers` (without which `customer_lookup` misses the caller on their next call and a duplicate is created) and then creates a real address on the new customer. The customer-level `lead_source`, `tags` and notes are genuinely lost.
 
 ## 7.4 POST /leads field support, probed live 2026-09-30
 

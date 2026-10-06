@@ -13,12 +13,14 @@ import type { Mock } from 'vitest';
 // ── Mocks (paths resolve to the same modules handleCreateLead imports) ────────
 vi.mock('../../src/services/housecallpro/client.js', () => ({
   createLead: vi.fn(),
+  createAddress: vi.fn(),
 }));
 vi.mock('../../src/services/housecallpro/db/leads.js', () => ({
   insertLead: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../src/services/housecallpro/db/customers.js', () => ({
   getCustomerByHcpId: vi.fn().mockResolvedValue(null),
+  upsertCustomer: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../../src/services/housecallpro/db/jobTypes.js', () => ({
   resolveJobTypeUuid: vi.fn(),
@@ -26,6 +28,7 @@ vi.mock('../../src/services/housecallpro/db/jobTypes.js', () => ({
 }));
 vi.mock('../../src/services/housecallpro/db/callsessions.js', () => ({
   setLeadCreated: vi.fn().mockResolvedValue(undefined),
+  setMatchedCustomer: vi.fn().mockResolvedValue(undefined),
   setSelectedSlot: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../src/services/housecallpro/emailNotificationService.js', () => ({
@@ -33,10 +36,11 @@ vi.mock('../../src/services/housecallpro/emailNotificationService.js', () => ({
 }));
 
 import { handleCreateLead } from '../../src/services/housecallpro/handlers/lead.js';
-import { createLead } from '../../src/services/housecallpro/client.js';
+import { createLead, createAddress } from '../../src/services/housecallpro/client.js';
 import { insertLead } from '../../src/services/housecallpro/db/leads.js';
 import { resolveJobTypeUuid, resolveJobTypeName } from '../../src/services/housecallpro/db/jobTypes.js';
-import { setLeadCreated } from '../../src/services/housecallpro/db/callsessions.js';
+import { setLeadCreated, setMatchedCustomer } from '../../src/services/housecallpro/db/callsessions.js';
+import { upsertCustomer } from '../../src/services/housecallpro/db/customers.js';
 import { sendHcpNotification } from '../../src/services/housecallpro/emailNotificationService.js';
 import type {
   HcpCallSessionRow,
@@ -49,6 +53,9 @@ const insertLeadMock = insertLead as unknown as Mock;
 const resolveJobTypeUuidMock = resolveJobTypeUuid as unknown as Mock;
 const resolveJobTypeNameMock = resolveJobTypeName as unknown as Mock;
 const setLeadCreatedMock = setLeadCreated as unknown as Mock;
+const setMatchedCustomerMock = setMatchedCustomer as unknown as Mock;
+const upsertCustomerMock = upsertCustomer as unknown as Mock;
+const createAddressMock = createAddress as unknown as Mock;
 const sendHcpNotificationMock = sendHcpNotification as unknown as Mock;
 
 const REPAIR_UUID = 'jbt_a9d450afb2924b17bde05435c2c824dc';
@@ -88,6 +95,7 @@ function makeSession(overrides: Partial<HcpCallSessionRow> = {}): HcpCallSession
 beforeEach(() => {
   vi.clearAllMocks();
   createLeadMock.mockResolvedValue({ id: 'lea_1', number: 136 });
+  createAddressMock.mockResolvedValue({ id: 'adr_new' });
   resolveJobTypeUuidMock.mockResolvedValue(null);
   resolveJobTypeNameMock.mockResolvedValue(null);
 });
@@ -297,14 +305,97 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(sent.details.leadNumber).toBe(136);
   });
 
-  it('errors when no customer is identified', async () => {
+  it('errors when there is neither an identified customer nor a name', async () => {
     const res = await handleCreateLead(makeSession({ housecallproCustomerId: null }), ctx, {
       service_type: 'Electrical Repair',
       issue: 'Breaker keeps tripping',
     });
 
-    expect(res.result).toContain('no customer identified');
+    expect(res.result).toContain('no customer');
     expect(createLeadMock).not.toHaveBeenCalled();
+  });
+
+  it('errors when a new caller has a name but no address parts', async () => {
+    const res = await handleCreateLead(
+      makeSession({ housecallproCustomerId: null, serviceAddressMap: null }),
+      ctx,
+      { issue: 'Breaker keeps tripping', first_name: 'Dana', last_name: 'Reed' },
+    );
+
+    expect(res.result).toContain('pass street, city, state and zip');
+    expect(createLeadMock).not.toHaveBeenCalled();
+  });
+
+  it('creates the customer inline for a new caller and saves their address', async () => {
+    createLeadMock.mockResolvedValue({
+      id: 'lea_9',
+      number: 140,
+      customer: { id: 'cus_new', first_name: 'Dana', last_name: 'Reed' },
+    });
+
+    const res = await handleCreateLead(
+      makeSession({ housecallproCustomerId: null, serviceAddressMap: null }),
+      ctx,
+      {
+        issue: 'No power to the garage',
+        first_name: 'Dana',
+        last_name: 'Reed',
+        email: 'dana@example.com',
+        street: '18 Oak Street',
+        city: 'Vallejo',
+        state: 'CA',
+        zip: '94590',
+      },
+    );
+
+    const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
+    expect('customer_id' in body).toBe(false);
+    expect(body.customer).toMatchObject({ first_name: 'Dana', last_name: 'Reed', email: 'dana@example.com' });
+    // Falls back to the number they are calling from.
+    expect(body.customer?.mobile_number).toBe('+13105551212');
+    expect(body.address).toEqual({ street: '18 Oak Street', city: 'Vallejo', state: 'CA', zip: '94590' });
+
+    // The inline address is text on the lead only, so a real one is created after.
+    expect(createAddressMock).toHaveBeenCalledWith(ctx, 'cus_new', {
+      street: '18 Oak Street',
+      city: 'Vallejo',
+      state: 'CA',
+      zip: '94590',
+    });
+    // ...and the caller must be cached, or customer_lookup misses them next time.
+    expect(upsertCustomerMock).toHaveBeenCalledWith('tenant-1', expect.objectContaining({ id: 'cus_new' }));
+    expect(setMatchedCustomerMock).toHaveBeenCalledWith('sess-1', 'cus_new', 'Dana Reed', 'new_customer');
+
+    const persisted = insertLeadMock.mock.calls[0][1];
+    expect(persisted.housecallproCustomerId).toBe('cus_new');
+    expect(persisted.addressId).toBe('adr_new');
+    expect(JSON.parse(res.result).status).toBe('created');
+  });
+
+  it('still logs the lead when saving the new address fails', async () => {
+    createLeadMock.mockResolvedValue({
+      id: 'lea_9',
+      number: 140,
+      customer: { id: 'cus_new', first_name: 'Dana', last_name: 'Reed' },
+    });
+    createAddressMock.mockRejectedValue(new Error('HCP POST /customers/cus_new/addresses → 500'));
+
+    const res = await handleCreateLead(
+      makeSession({ housecallproCustomerId: null, serviceAddressMap: null }),
+      ctx,
+      {
+        issue: 'No power to the garage',
+        first_name: 'Dana',
+        last_name: 'Reed',
+        street: '18 Oak Street',
+        city: 'Vallejo',
+        state: 'CA',
+        zip: '94590',
+      },
+    );
+
+    expect(JSON.parse(res.result).status).toBe('created');
+    expect(insertLeadMock.mock.calls[0][1].addressId).toBeNull();
   });
 
   it('errors when no address is selected', async () => {
