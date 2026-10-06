@@ -25,9 +25,13 @@ import type { HcpCallSessionRow, RetellFunctionResult } from '../types.js';
 export async function handleCustomerLookup(
   session: HcpCallSessionRow,
 ): Promise<RetellFunctionResult> {
-  // Resolved once at call start and pinned to the session; null means the dialed
-  // line maps to no HCP lead source, so Clara has to ask the caller.
-  const askLeadSource = !session.leadSourceName;
+  // Whether Clara has to ask "how did you hear about us?".
+  //
+  // Two conditions, both required. The dialed line must map to no HCP lead
+  // source (resolved once at call start and pinned to the session), AND the
+  // caller must be someone we don't already know — asking a repeat customer
+  // where they heard of us is a question they have already answered.
+  const leadSourceUnknown = !session.leadSourceName;
 
   // Idempotent: if already identified (e.g. the agent calls it twice), return the match.
   if (session.housecallproCustomerId) {
@@ -40,7 +44,7 @@ export async function handleCustomerLookup(
         customer_name: session.customerName ?? c?.name ?? '',
         first_name: c?.firstName ?? '',
         last_name: c?.lastName ?? '',
-        ask_lead_source: askLeadSource,
+        ask_lead_source: false,
       }),
     };
   }
@@ -60,7 +64,7 @@ export async function handleCustomerLookup(
         customer_name: c.name,
         first_name: c.firstName ?? '',
         last_name: c.lastName ?? '',
-        ask_lead_source: askLeadSource,
+        ask_lead_source: false,
       }),
     };
   }
@@ -68,7 +72,7 @@ export async function handleCustomerLookup(
   if (matches.length === 0) {
     // Do NOT record a customer — leaves the door open for lookup_customer_fuzzy.
     return {
-      result: JSON.stringify({ status: 'not_found', identified: false, ask_lead_source: askLeadSource }),
+      result: JSON.stringify({ status: 'not_found', identified: false, ask_lead_source: leadSourceUnknown }),
     };
   }
 
@@ -78,7 +82,7 @@ export async function handleCustomerLookup(
       status: 'multiple_matches',
       identified: false,
       candidates: matches.map(m => ({ id: m.housecallproCustomerId, name: m.name })),
-      ask_lead_source: askLeadSource,
+      ask_lead_source: false,
     }),
   };
 }
