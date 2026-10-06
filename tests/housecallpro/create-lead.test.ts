@@ -22,6 +22,7 @@ vi.mock('../../src/services/housecallpro/db/customers.js', () => ({
 }));
 vi.mock('../../src/services/housecallpro/db/jobTypes.js', () => ({
   resolveJobTypeUuid: vi.fn(),
+  resolveJobTypeName: vi.fn(),
 }));
 vi.mock('../../src/services/housecallpro/db/leadSources.js', () => ({
   resolveLeadSource: vi.fn(),
@@ -37,7 +38,7 @@ vi.mock('../../src/services/housecallpro/emailNotificationService.js', () => ({
 import { handleCreateLead } from '../../src/services/housecallpro/handlers/lead.js';
 import { createLead } from '../../src/services/housecallpro/client.js';
 import { insertLead } from '../../src/services/housecallpro/db/leads.js';
-import { resolveJobTypeUuid } from '../../src/services/housecallpro/db/jobTypes.js';
+import { resolveJobTypeUuid, resolveJobTypeName } from '../../src/services/housecallpro/db/jobTypes.js';
 import { resolveLeadSource } from '../../src/services/housecallpro/db/leadSources.js';
 import { setLeadCreated } from '../../src/services/housecallpro/db/callsessions.js';
 import { sendHcpNotification } from '../../src/services/housecallpro/emailNotificationService.js';
@@ -50,6 +51,7 @@ import type {
 const createLeadMock = createLead as unknown as Mock;
 const insertLeadMock = insertLead as unknown as Mock;
 const resolveJobTypeUuidMock = resolveJobTypeUuid as unknown as Mock;
+const resolveJobTypeNameMock = resolveJobTypeName as unknown as Mock;
 const resolveLeadSourceMock = resolveLeadSource as unknown as Mock;
 const setLeadCreatedMock = setLeadCreated as unknown as Mock;
 const sendHcpNotificationMock = sendHcpNotification as unknown as Mock;
@@ -91,6 +93,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   createLeadMock.mockResolvedValue({ id: 'lea_1', number: 136 });
   resolveJobTypeUuidMock.mockResolvedValue(null);
+  resolveJobTypeNameMock.mockResolvedValue(null);
   resolveLeadSourceMock.mockResolvedValue(null);
 });
 
@@ -121,11 +124,23 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(result).toEqual({ status: 'created', lead_id: 'lea_1', lead_number: 136, scheduled: false });
   });
 
-  it('sets job_type_uuid at the top level, never under job_fields', async () => {
+  it('takes the job type off the session, at the top level, never under job_fields', async () => {
+    await handleCreateLead(makeSession({ jobTypeUuid: REPAIR_UUID }), ctx, {
+      service_type: 'Outlet Repair',
+      issue: 'No power to the kitchen outlets',
+    });
+
+    const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
+    expect(body.job_type_uuid).toBe(REPAIR_UUID);
+    expect('job_fields' in body).toBe(false);
+    // set_job_type already resolved it — no second lookup.
+    expect(resolveJobTypeUuidMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a job_type argument when set_job_type was skipped', async () => {
     resolveJobTypeUuidMock.mockResolvedValue(REPAIR_UUID);
 
     await handleCreateLead(makeSession(), ctx, {
-      service_type: 'Outlet Repair',
       issue: 'No power to the kitchen outlets',
       job_type: 'Repair',
     });
@@ -133,16 +148,11 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(resolveJobTypeUuidMock).toHaveBeenCalledWith('tenant-1', 'Repair');
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
     expect(body.job_type_uuid).toBe(REPAIR_UUID);
-    expect('job_fields' in body).toBe(false);
   });
 
-  it('still creates the lead when the job type is unknown', async () => {
-    resolveJobTypeUuidMock.mockResolvedValue(null);
-
+  it('still creates the lead when no job type was ever set', async () => {
     const res = await handleCreateLead(makeSession(), ctx, {
-      service_type: 'Other/General - rewire quote',
       issue: 'Wants a quote for rewiring the garage',
-      job_type: 'Rewiring',
     });
 
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
@@ -150,7 +160,7 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(JSON.parse(res.result).status).toBe('created');
   });
 
-  it('does not let the job_type enum leak into the Issue Description', async () => {
+  it('does not let a job_type argument leak into the Issue Description', async () => {
     resolveJobTypeUuidMock.mockResolvedValue(REPAIR_UUID);
 
     // No issue / service_name / reason given — book_job would fall back to
@@ -159,6 +169,15 @@ describe('handleCreateLead — lead-only intake', () => {
 
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
     expect(body.note).toBe('Issue Description :- Service request');
+  });
+
+  it('omits service_type from the note when the agent could not label the work', async () => {
+    await handleCreateLead(makeSession({ jobTypeUuid: REPAIR_UUID }), ctx, {
+      issue: 'Something is buzzing behind the wall',
+    });
+
+    const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
+    expect(body.note).toBe('Issue Description :- Something is buzzing behind the wall');
   });
 
   it('prefers the spoken lead source over the dialed line', async () => {
@@ -236,12 +255,9 @@ describe('handleCreateLead — lead-only intake', () => {
   });
 
   it('persists the lead and records it on the session, keeping the window locally', async () => {
-    resolveJobTypeUuidMock.mockResolvedValue(REPAIR_UUID);
-
-    await handleCreateLead(makeSession(), ctx, {
+    await handleCreateLead(makeSession({ jobTypeUuid: REPAIR_UUID }), ctx, {
       service_type: 'Outlet Repair',
       issue: 'No power to the kitchen outlets',
-      job_type: 'Repair',
       scheduled_start: '2026-07-24T09:00:00',
       scheduled_end: '2026-07-24T12:00:00',
     });
@@ -257,13 +273,12 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(setLeadCreatedMock).toHaveBeenCalledWith('sess-1', 'lea_1', 136, REPAIR_UUID);
   });
 
-  it('sends the lead_created email, not job_booked', async () => {
-    resolveJobTypeUuidMock.mockResolvedValue(REPAIR_UUID);
+  it('sends the lead_created email with the job-type name, not job_booked', async () => {
+    resolveJobTypeNameMock.mockResolvedValue('Repair');
 
-    await handleCreateLead(makeSession(), ctx, {
+    await handleCreateLead(makeSession({ jobTypeUuid: REPAIR_UUID }), ctx, {
       service_type: 'Outlet Repair',
       issue: 'No power to the kitchen outlets',
-      job_type: 'Repair',
     });
 
     expect(sendHcpNotificationMock).toHaveBeenCalledTimes(1);

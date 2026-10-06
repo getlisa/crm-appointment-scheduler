@@ -40,3 +40,25 @@ export async function resolveJobTypeUuid(
   if (error || !data || data.length === 0) return null;
   return ((data[0] as Record<string, unknown>).housecallpro_job_type_id as string | null) ?? null;
 }
+
+/**
+ * Reverse lookup: the job-type name for a stored uuid.
+ * Used for the notification email, so Laura sees "Repair" and not a `jbt_…`.
+ */
+export async function resolveJobTypeName(
+  tenantId: string,
+  uuid: string | null | undefined,
+): Promise<string | null> {
+  const trimmed = uuid?.trim();
+  if (!trimmed) return null;
+
+  const { data, error } = await supabase
+    .from('housecallpro_job_types')
+    .select('name')
+    .eq('tenant_id', tenantId)
+    .eq('housecallpro_job_type_id', trimmed)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return ((data as Record<string, unknown>).name as string | null) ?? null;
+}

@@ -21,7 +21,7 @@ import { createLead } from '../client.js';
 import { resolveNotes } from '../requestNotes.js';
 import { insertLead } from '../db/leads.js';
 import { getCustomerByHcpId } from '../db/customers.js';
-import { resolveJobTypeUuid } from '../db/jobTypes.js';
+import { resolveJobTypeName, resolveJobTypeUuid } from '../db/jobTypes.js';
 import { resolveLeadSource } from '../db/leadSources.js';
 import { setLeadCreated, setSelectedSlot } from '../db/callsessions.js';
 import { sendHcpNotification } from '../emailNotificationService.js';
@@ -78,16 +78,22 @@ export async function handleCreateLead(
   // written into the note alongside the service type and their account.
   const note = resolveNotes(args, { label: 'Request', jobTypeAsIssueFallback: false });
 
-  // The agent picks a job-type NAME from the tool enum; the uuid lives in our
-  // table. An unknown name is dropped — never fail the lead over a classification.
-  const jobTypeName = (args.job_type as string | undefined)?.trim() || null;
-  const jobTypeUuid = await resolveJobTypeUuid(session.tenantId, jobTypeName).catch(() => null);
-  if (jobTypeName && !jobTypeUuid) {
-    console.warn('[hcp] create_lead unknown job_type — sending lead without one', {
+  // Classification normally arrives earlier in the call via set_job_type, which
+  // pins the uuid to the session. A job_type argument is still honoured as a
+  // fallback when that call was skipped. Either way an unresolved name is
+  // dropped — never fail the lead over a classification.
+  const spokenJobType = (args.job_type as string | undefined)?.trim() || null;
+  const jobTypeUuid =
+    session.jobTypeUuid ??
+    (await resolveJobTypeUuid(session.tenantId, spokenJobType).catch(() => null));
+  if (!jobTypeUuid) {
+    console.warn('[hcp] create_lead has no job type — sending lead without one', {
       sessionId: session.sessionId,
-      jobTypeName,
+      spokenJobType,
     });
   }
+  const jobTypeName =
+    spokenJobType ?? (await resolveJobTypeName(session.tenantId, jobTypeUuid).catch(() => null));
 
   // Attribution: the answer Clara collected when the dialed line is unmapped wins,
   // otherwise the tracking line behind the call.

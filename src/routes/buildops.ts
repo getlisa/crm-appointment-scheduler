@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { supabaseAdmin as supabase } from '../lib/supabase.js';
 import { env } from '../config/env.js';
-import { resolveByInboundNumber, resolveByTenantId } from '../services/buildops/db/tenants.js';
+import { resolveByInboundNumber, resolveByTenantId, saveAccessToken } from '../services/buildops/db/tenants.js';
+import { login, BuildOpsAuthError } from '../services/buildops/auth.js';
 import {
   createInboundCall,
   findActiveByCallerAndTenant,
@@ -133,6 +134,64 @@ router.get('/admin/tenants', async (_req, res) => {
   }
 
   res.json({ tenants: data });
+});
+
+// ── Auth: login with BuildOps client credentials ─────────────────────────────
+
+const LoginSchema = z.object({
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(1),
+  tenantId: z.string().min(1),
+});
+
+/**
+ * POST /api/buildops/auth/login
+ * Exchanges BuildOps client credentials for a fresh Bearer token, mirrors it onto
+ * buildops_tenants.access_token, and returns it.
+ *
+ * @body { clientId, clientSecret, tenantId }
+ * @returns 200 { ok, access_token, buildops_tenant_id, no, expires_at, persisted }
+ *          400 invalid body | 401 BuildOps rejected the credentials | 502 upstream/auth failure
+ */
+router.post('/auth/login', async (req, res) => {
+  const parsed = LoginSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, error: parsed.error.format() });
+    return;
+  }
+
+  const { clientId, clientSecret, tenantId } = parsed.data;
+
+  try {
+    const { accessToken, tokenType, expiresIn, expiresAt } = await login(
+      env.buildopsApiUrl,
+      { clientId, clientSecret, tenantId },
+    );
+    const no = await saveAccessToken(tenantId, accessToken);
+
+    if (!no) {
+      console.warn('[buildops] auth/login: no buildops_tenants row for tenant', tenantId);
+    }
+
+    res.json({
+      ok: true,
+      access_token: accessToken,
+      token_type: tokenType,
+      expires_in: expiresIn,
+      expires_at: expiresAt,
+      buildops_tenant_id: tenantId,
+      no,
+      persisted: no !== null,
+    });
+  } catch (error) {
+    logBuildopsException('[buildops] auth/login failed', error);
+    if (error instanceof BuildOpsAuthError) {
+      const status = error.status === 400 || error.status === 401 || error.status === 403 ? 401 : 502;
+      res.status(status).json({ ok: false, error: error.message });
+      return;
+    }
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : 'unknown error' });
+  }
 });
 
 // ── Retell lifecycle webhook ──────────────────────────────────────────────────

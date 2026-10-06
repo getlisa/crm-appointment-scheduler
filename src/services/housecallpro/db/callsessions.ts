@@ -186,6 +186,17 @@ export async function setJobCreated(
     .eq('session_id', sessionId);
 }
 
+/**
+ * Pins the HCP job type the agent classified, so create_lead can pick it up
+ * later in the call without the classification riding on its own arguments.
+ */
+export async function setJobType(sessionId: string, jobTypeUuid: string): Promise<void> {
+  await supabase
+    .from('housecallpro_callsessions')
+    .update({ job_type_uuid: jobTypeUuid })
+    .eq('session_id', sessionId);
+}
+
 /** Records the HCP lead create_lead just logged (Pierce's lead-only intake). */
 export async function setLeadCreated(
   sessionId: string,
