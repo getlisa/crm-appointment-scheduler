@@ -22,7 +22,6 @@ import { resolveNotes } from '../requestNotes.js';
 import { insertLead } from '../db/leads.js';
 import { getCustomerByHcpId } from '../db/customers.js';
 import { resolveJobTypeName, resolveJobTypeUuid } from '../db/jobTypes.js';
-import { resolveLeadSource } from '../db/leadSources.js';
 import { setLeadCreated, setSelectedSlot } from '../db/callsessions.js';
 import { sendHcpNotification } from '../emailNotificationService.js';
 import type {
@@ -33,9 +32,9 @@ import type {
 } from '../types.js';
 
 /**
- * Lead source stamped on a lead whose attribution came from the caller rather
- * than the dialed tracking line. Must exist in the tenant's HCP lead sources;
- * if it doesn't, HCP rejects the name and the lead is retried without it.
+ * Lead source stamped on a lead whose dialed line maps to no configured source.
+ * Must exist in the tenant's HCP lead sources; if it doesn't, HCP rejects the
+ * name and the lead is retried without it.
  */
 const AGENT_LEAD_SOURCE = 'Clara';
 
@@ -108,19 +107,17 @@ export async function handleCreateLead(
   // the account actually has is ever sent — and never an `lsrc_…` id.
   //
   // The dialed tracking line is the authority: it is a fact about which number
-  // rang, captured at call_started, and it beats anything said on the call.
+  // rang, resolved once at call start and pinned to the session, and it beats
+  // anything said on the call.
   //
-  // When that line maps to nothing, Clara asks the caller instead. Their answer
-  // is free text and cannot be trusted as an HCP name, so the attribution is
-  // stamped with AGENT_LEAD_SOURCE — one fixed name meaning "the agent collected
-  // this" — and their actual words go on the note where the office reads them.
-  const dialedLead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber)
-    .catch(() => null);
-  const dialedName = dialedLead?.leadName ?? null;
+  // When that line maps to nothing, the attribution is stamped AGENT_LEAD_SOURCE —
+  // one fixed name meaning "this call came in through Clara, not a tracked line".
+  // Clara also asks the caller where they heard of us; their answer is free text
+  // that cannot be trusted as an HCP name, so it goes on the note instead, where
+  // the office reads it.
+  const leadSource = session.leadSourceName ?? AGENT_LEAD_SOURCE;
 
   const spokenLeadSource = (args.lead_source as string | undefined)?.trim() || null;
-  const leadSource = dialedName ?? (spokenLeadSource ? AGENT_LEAD_SOURCE : null);
-
   if (spokenLeadSource) {
     note += `\nHeard about us :- ${spokenLeadSource}`;
   }
@@ -131,7 +128,7 @@ export async function handleCreateLead(
     note,
     tags: ['Clara'],
     ...(jobTypeUuid ? { job_type_uuid: jobTypeUuid } : {}),
-    ...(leadSource ? { lead_source: leadSource } : {}),
+    lead_source: leadSource,
   };
 
   // The caller's requested timeframe is kept for our own records only.

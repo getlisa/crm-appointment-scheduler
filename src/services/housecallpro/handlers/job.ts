@@ -17,7 +17,6 @@ import { createJob } from '../client.js';
 import { resolveNotes } from '../requestNotes.js';
 import { insertJob } from '../db/jobs.js';
 import { getCustomerByHcpId } from '../db/customers.js';
-import { resolveLeadSource } from '../db/leadSources.js';
 import { setJobCreated, setSelectedSlot } from '../db/callsessions.js';
 import { sendHcpNotification } from '../emailNotificationService.js';
 import type {
@@ -71,15 +70,14 @@ export async function handleBookJob(
 
   const notes = resolveNotes(args);
 
-  // Attribute the job to the HCP lead source behind the dialed tracking line.
-  // Prefer the SIP Diversion tracking line (the actual lead source); fall back to
-  // to_number (the shared DID) only when the diversion wasn't captured.
-  const lead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
+  // Attribute the job to the HCP lead source behind the dialed tracking line,
+  // resolved once at call start and pinned to the session.
+  //
   // `lead_source` is a lead-source NAME, not an id: HCP looks the string up among
   // the account's configured lead sources and rejects the whole job with
-  // 400 "Lead source not found" when it doesn't match. So an unmapped line (or a
-  // row with no lead_name) sends no lead_source at all — never an `lsrc_…` id.
-  const leadSource = lead?.leadName ?? null;
+  // 400 "Lead source not found" when it doesn't match. So an unmapped line sends
+  // no lead_source at all — never an `lsrc_…` id.
+  const leadSource = session.leadSourceName;
 
   // Unscheduled "new job": no `schedule`, no `line_items` — the issue + requested
   // window are in `notes`. HCP returns work_status "new job".

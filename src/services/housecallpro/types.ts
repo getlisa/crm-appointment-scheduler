@@ -244,6 +244,8 @@ export interface HcpCallSessionRow {
   toNumber: string | null;
   /** Tracking line parsed from the SIP Diversion header; used for lead-source attribution. */
   leadSourceNumber: string | null;
+  /** HCP lead source resolved from that line at call start. Null when it maps to nothing. */
+  leadSourceName: string | null;
   housecallproCustomerId: string | null;
   customerName: string | null;
   matchTier: string | null;

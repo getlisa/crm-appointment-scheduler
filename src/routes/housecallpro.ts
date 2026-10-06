@@ -20,10 +20,12 @@ import {
   findActiveByCallerAndTenant,
   setRetellCallId,
   setLeadSourceNumber,
+  setLeadSourceName,
   setMatchedCustomer,
   setStatus,
 } from '../services/housecallpro/db/callsessions.js';
 import { findCustomersByPhone, buildCustomerRow } from '../services/housecallpro/db/customers.js';
+import { resolveLeadSource } from '../services/housecallpro/db/leadSources.js';
 import { normalizePhoneLast10 } from '../services/housecallpro/fuzzy-search.js';
 import { diversionNumberFrom } from '../services/housecallpro/sip.js';
 import { listCustomers } from '../services/housecallpro/client.js';
@@ -111,24 +113,55 @@ async function ensureCallSession(params: {
     }
     // Always refresh: a reused session may carry an earlier call's tracking line,
     // and a stale lead_source_number resolves to the wrong HCP lead source (or none).
+    let lineChanged = false;
     if (params.leadSourceNumber && session.leadSourceNumber !== params.leadSourceNumber) {
       await setLeadSourceNumber(session.sessionId, params.leadSourceNumber);
       session = { ...session, leadSourceNumber: params.leadSourceNumber };
+      lineChanged = true;
     }
-    return session;
+    return await ensureLeadSourceName(session, lineChanged);
   }
 
   if (!params.toNumber) return null;
   const token = await resolveByInboundNumber(params.toNumber);
   if (!token) return null;
 
-  return createCallSession({
+  const created = await createCallSession({
     tenantId: token.tenantId,
     caller: params.fromNumber ?? '',
     toNumber: params.toNumber,
     leadSourceNumber: params.leadSourceNumber ?? null,
     retellCallId: params.callId ?? null,
   });
+  return await ensureLeadSourceName(created, true);
+}
+
+/**
+ * Resolves the dialed tracking line to an HCP lead source NAME once and pins it
+ * to the session, so no handler has to look it up again mid-call.
+ *
+ * Runs when the session has no name yet, or when the tracking line just changed
+ * under a reused session. A line that maps to nothing leaves the name null —
+ * which is exactly what makes customer_lookup return ask_lead_source: true.
+ */
+async function ensureLeadSourceName(
+  session: HcpCallSessionRow,
+  lineChanged: boolean,
+): Promise<HcpCallSessionRow> {
+  if (session.leadSourceName && !lineChanged) return session;
+
+  const resolved = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber)
+    .catch(() => null);
+  const name = resolved?.leadName ?? null;
+  if (name === session.leadSourceName) return session;
+
+  await setLeadSourceName(session.sessionId, name).catch(() => undefined);
+  console.log('[hcp] lead source resolved', {
+    sessionId: session.sessionId,
+    leadSourceNumber: session.leadSourceNumber ?? session.toNumber,
+    leadSourceName: name,
+  });
+  return { ...session, leadSourceName: name };
 }
 
 async function resolveSession(

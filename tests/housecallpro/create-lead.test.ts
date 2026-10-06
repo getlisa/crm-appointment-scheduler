@@ -24,9 +24,6 @@ vi.mock('../../src/services/housecallpro/db/jobTypes.js', () => ({
   resolveJobTypeUuid: vi.fn(),
   resolveJobTypeName: vi.fn(),
 }));
-vi.mock('../../src/services/housecallpro/db/leadSources.js', () => ({
-  resolveLeadSource: vi.fn(),
-}));
 vi.mock('../../src/services/housecallpro/db/callsessions.js', () => ({
   setLeadCreated: vi.fn().mockResolvedValue(undefined),
   setSelectedSlot: vi.fn().mockResolvedValue(undefined),
@@ -39,7 +36,6 @@ import { handleCreateLead } from '../../src/services/housecallpro/handlers/lead.
 import { createLead } from '../../src/services/housecallpro/client.js';
 import { insertLead } from '../../src/services/housecallpro/db/leads.js';
 import { resolveJobTypeUuid, resolveJobTypeName } from '../../src/services/housecallpro/db/jobTypes.js';
-import { resolveLeadSource } from '../../src/services/housecallpro/db/leadSources.js';
 import { setLeadCreated } from '../../src/services/housecallpro/db/callsessions.js';
 import { sendHcpNotification } from '../../src/services/housecallpro/emailNotificationService.js';
 import type {
@@ -52,7 +48,6 @@ const createLeadMock = createLead as unknown as Mock;
 const insertLeadMock = insertLead as unknown as Mock;
 const resolveJobTypeUuidMock = resolveJobTypeUuid as unknown as Mock;
 const resolveJobTypeNameMock = resolveJobTypeName as unknown as Mock;
-const resolveLeadSourceMock = resolveLeadSource as unknown as Mock;
 const setLeadCreatedMock = setLeadCreated as unknown as Mock;
 const sendHcpNotificationMock = sendHcpNotification as unknown as Mock;
 
@@ -69,6 +64,7 @@ function makeSession(overrides: Partial<HcpCallSessionRow> = {}): HcpCallSession
     caller: '+13105551212',
     toNumber: '+17076223573',
     leadSourceNumber: null,
+    leadSourceName: null,
     housecallproCustomerId: 'cus_1',
     customerName: 'Jane Doe',
     matchTier: 'phone',
@@ -94,7 +90,6 @@ beforeEach(() => {
   createLeadMock.mockResolvedValue({ id: 'lea_1', number: 136 });
   resolveJobTypeUuidMock.mockResolvedValue(null);
   resolveJobTypeNameMock.mockResolvedValue(null);
-  resolveLeadSourceMock.mockResolvedValue(null);
 });
 
 describe('handleCreateLead — lead-only intake', () => {
@@ -180,10 +175,8 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(body.note).toBe('Issue Description :- Something is buzzing behind the wall');
   });
 
-  it('stamps Clara as the source when the caller was asked, keeping their words on the note', async () => {
-    resolveLeadSourceMock.mockResolvedValue(null); // tracking line maps to nothing
-
-    await handleCreateLead(makeSession(), ctx, {
+  it('stamps Clara when the dialed line maps to nothing, keeping the words on the note', async () => {
+    await handleCreateLead(makeSession({ leadSourceName: null }), ctx, {
       service_type: 'Electrical Repair',
       issue: 'Breaker keeps tripping',
       lead_source: 'my neighbour used you last year',
@@ -196,12 +189,7 @@ describe('handleCreateLead — lead-only intake', () => {
   });
 
   it('lets the dialed tracking line beat whatever the caller said', async () => {
-    resolveLeadSourceMock.mockResolvedValue({
-      leadSourceId: 'lsrc_7b2',
-      leadName: 'Google Local Services Vallejo',
-    });
-
-    await handleCreateLead(makeSession({ leadSourceNumber: '+17075134910' }), ctx, {
+    await handleCreateLead(makeSession({ leadSourceName: 'Google Local Services Vallejo' }), ctx, {
       issue: 'Breaker keeps tripping',
       lead_source: 'I saw your van',
     });
@@ -212,54 +200,47 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(body.note).toContain('Heard about us :- I saw your van');
   });
 
-  it('sends no lead_source at all when the line is unmapped and nobody was asked', async () => {
-    resolveLeadSourceMock.mockResolvedValue(null);
-
-    const res = await handleCreateLead(makeSession(), ctx, { issue: 'Breaker keeps tripping' });
+  it('still stamps Clara when the line is unmapped and nobody was asked', async () => {
+    const res = await handleCreateLead(makeSession({ leadSourceName: null }), ctx, {
+      issue: 'Breaker keeps tripping',
+    });
 
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
-    expect('lead_source' in body).toBe(false);
+    expect(body.lead_source).toBe('Clara');
     expect(body.note).not.toContain('Heard about us');
     expect(JSON.parse(res.result).status).toBe('created');
   });
 
-  it('falls back to the dialed tracking line when the caller was not asked', async () => {
-    resolveLeadSourceMock.mockResolvedValue({
-      leadSourceId: 'lsrc_7b2',
-      leadName: 'Google Local Services Vallejo',
-    });
-
-    await handleCreateLead(makeSession({ leadSourceNumber: '+17075134910' }), ctx, {
+  it('uses the session lead source when the caller was never asked', async () => {
+    await handleCreateLead(makeSession({ leadSourceName: 'Google Local Services Vallejo' }), ctx, {
       service_type: 'Electrical Repair',
       issue: 'Breaker keeps tripping',
     });
 
-    expect(resolveLeadSourceMock).toHaveBeenCalledWith('+17075134910');
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
     expect(body.lead_source).toBe('Google Local Services Vallejo');
+    expect(body.note).not.toContain('Heard about us');
   });
 
-  it('never sends the lsrc_ id in the lead_source name field', async () => {
-    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'lsrc_abc', leadName: null });
-
-    await handleCreateLead(makeSession(), ctx, {
+  it('never sends an lsrc_ id in the lead_source name field', async () => {
+    await handleCreateLead(makeSession({ leadSourceName: null }), ctx, {
       service_type: 'Electrical Repair',
       issue: 'Breaker keeps tripping',
     });
 
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
-    expect('lead_source' in body).toBe(false);
+    expect(body.lead_source).toBe('Clara');
+    expect(body.lead_source).not.toMatch(/^lsrc_/);
   });
 
   it('retries without lead_source when HCP rejects the name', async () => {
-    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'ls_1', leadName: 'google my business' });
     createLeadMock
       .mockRejectedValueOnce(
         new Error('HCP POST /leads → 400: {"error":{"message":"Lead source not found"}}'),
       )
       .mockResolvedValueOnce({ id: 'lea_2', number: 137 });
 
-    const res = await handleCreateLead(makeSession(), ctx, {
+    const res = await handleCreateLead(makeSession({ leadSourceName: 'google my business' }), ctx, {
       service_type: 'Electrical Repair',
       issue: 'Breaker keeps tripping',
     });
@@ -271,10 +252,9 @@ describe('handleCreateLead — lead-only intake', () => {
   });
 
   it('does not retry when the failure is unrelated to the lead source', async () => {
-    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'ls_1', leadName: 'Google' });
     createLeadMock.mockRejectedValueOnce(new Error('HCP POST /leads → 500: boom'));
 
-    const res = await handleCreateLead(makeSession(), ctx, {
+    const res = await handleCreateLead(makeSession({ leadSourceName: 'Google' }), ctx, {
       service_type: 'Electrical Repair',
       issue: 'Breaker keeps tripping',
     });

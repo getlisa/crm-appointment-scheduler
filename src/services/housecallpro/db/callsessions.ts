@@ -19,6 +19,7 @@ function mapRow(row: Record<string, unknown>): HcpCallSessionRow {
     caller: row.caller as string,
     toNumber: (row.to_number as string | null) ?? null,
     leadSourceNumber: (row.lead_source_number as string | null) ?? null,
+    leadSourceName: (row.lead_source_name as string | null) ?? null,
     housecallproCustomerId: (row.housecallpro_customer_id as string | null) ?? null,
     customerName: (row.customer_name as string | null) ?? null,
     matchTier: (row.match_tier as string | null) ?? null,
@@ -127,6 +128,17 @@ export async function setLeadSourceNumber(sessionId: string, leadSourceNumber: s
   await supabase
     .from('housecallpro_callsessions')
     .update({ lead_source_number: leadSourceNumber })
+    .eq('session_id', sessionId);
+}
+
+/**
+ * Stores the HCP lead source resolved from the tracking line. Written once at
+ * call start so no handler has to resolve it again mid-call.
+ */
+export async function setLeadSourceName(sessionId: string, leadSourceName: string | null): Promise<void> {
+  await supabase
+    .from('housecallpro_callsessions')
+    .update({ lead_source_name: leadSourceName })
     .eq('session_id', sessionId);
 }
 

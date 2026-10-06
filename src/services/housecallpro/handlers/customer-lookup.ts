@@ -19,15 +19,15 @@
 
 import { findCustomersByPhone, getCustomerByHcpId } from '../db/customers.js';
 import { setMatchedCustomer } from '../db/callsessions.js';
-import { resolveLeadSource } from '../db/leadSources.js';
 import { normalizePhoneLast10 } from '../fuzzy-search.js';
 import type { HcpCallSessionRow, RetellFunctionResult } from '../types.js';
 
 export async function handleCustomerLookup(
   session: HcpCallSessionRow,
 ): Promise<RetellFunctionResult> {
-  const dialedLead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
-  const askLeadSource = !dialedLead?.leadName;
+  // Resolved once at call start and pinned to the session; null means the dialed
+  // line maps to no HCP lead source, so Clara has to ask the caller.
+  const askLeadSource = !session.leadSourceName;
 
   // Idempotent: if already identified (e.g. the agent calls it twice), return the match.
   if (session.housecallproCustomerId) {
