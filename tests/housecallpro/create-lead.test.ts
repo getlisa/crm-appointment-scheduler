@@ -13,7 +13,6 @@ import type { Mock } from 'vitest';
 // ── Mocks (paths resolve to the same modules handleCreateLead imports) ────────
 vi.mock('../../src/services/housecallpro/client.js', () => ({
   createLead: vi.fn(),
-  createAddress: vi.fn(),
 }));
 vi.mock('../../src/services/housecallpro/db/leads.js', () => ({
   insertLead: vi.fn().mockResolvedValue(undefined),
@@ -36,7 +35,7 @@ vi.mock('../../src/services/housecallpro/emailNotificationService.js', () => ({
 }));
 
 import { handleCreateLead } from '../../src/services/housecallpro/handlers/lead.js';
-import { createLead, createAddress } from '../../src/services/housecallpro/client.js';
+import { createLead } from '../../src/services/housecallpro/client.js';
 import { insertLead } from '../../src/services/housecallpro/db/leads.js';
 import { resolveJobTypeUuid, resolveJobTypeName } from '../../src/services/housecallpro/db/jobTypes.js';
 import { setLeadCreated, setMatchedCustomer } from '../../src/services/housecallpro/db/callsessions.js';
@@ -55,7 +54,6 @@ const resolveJobTypeNameMock = resolveJobTypeName as unknown as Mock;
 const setLeadCreatedMock = setLeadCreated as unknown as Mock;
 const setMatchedCustomerMock = setMatchedCustomer as unknown as Mock;
 const upsertCustomerMock = upsertCustomer as unknown as Mock;
-const createAddressMock = createAddress as unknown as Mock;
 const sendHcpNotificationMock = sendHcpNotification as unknown as Mock;
 
 const REPAIR_UUID = 'jbt_a9d450afb2924b17bde05435c2c824dc';
@@ -95,7 +93,6 @@ function makeSession(overrides: Partial<HcpCallSessionRow> = {}): HcpCallSession
 beforeEach(() => {
   vi.clearAllMocks();
   createLeadMock.mockResolvedValue({ id: 'lea_1', number: 136 });
-  createAddressMock.mockResolvedValue({ id: 'adr_new' });
   resolveJobTypeUuidMock.mockResolvedValue(null);
   resolveJobTypeNameMock.mockResolvedValue(null);
 });
@@ -183,6 +180,19 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(body.note).toBe('Issue Description :- Something is buzzing behind the wall');
   });
 
+  it('never promotes the spoken answer to attribution, even when it names a real source', async () => {
+    // call_69ba94bf sent lead_source "Google" without ever asking the caller.
+    // An invented answer must not become HCP marketing data.
+    await handleCreateLead(makeSession({ leadSourceName: null }), ctx, {
+      issue: 'Wiring inspection',
+      lead_source: 'Google',
+    });
+
+    const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
+    expect(body.lead_source).toBe('Clara');
+    expect(body.note).toContain('Heard about us :- Google');
+  });
+
   it('stamps Clara when the dialed line maps to nothing, keeping the words on the note', async () => {
     await handleCreateLead(makeSession({ leadSourceName: null }), ctx, {
       service_type: 'Electrical Repair',
@@ -191,7 +201,7 @@ describe('handleCreateLead — lead-only intake', () => {
     });
 
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
-    // The answer is free text and cannot be trusted as an HCP name.
+    // Names no configured source, so it cannot be sent as one.
     expect(body.lead_source).toBe('Clara');
     expect(body.note).toContain('Heard about us :- my neighbour used you last year');
   });
@@ -331,6 +341,7 @@ describe('handleCreateLead — lead-only intake', () => {
       id: 'lea_9',
       number: 140,
       customer: { id: 'cus_new', first_name: 'Dana', last_name: 'Reed' },
+      address: { id: 'adr_new', street: '18 Oak Street' },
     });
 
     const res = await handleCreateLead(
@@ -340,7 +351,7 @@ describe('handleCreateLead — lead-only intake', () => {
         issue: 'No power to the garage',
         first_name: 'Dana',
         last_name: 'Reed',
-        email: 'dana@example.com',
+        email: 'dana at example dot com',
         street: '18 Oak Street',
         city: 'Vallejo',
         state: 'CA',
@@ -350,21 +361,20 @@ describe('handleCreateLead — lead-only intake', () => {
 
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
     expect('customer_id' in body).toBe(false);
+    // The spoken form is normalised before it reaches HCP.
     expect(body.customer).toMatchObject({ first_name: 'Dana', last_name: 'Reed', email: 'dana@example.com' });
     // Falls back to the number they are calling from.
     expect(body.customer?.mobile_number).toBe('+13105551212');
-    expect(body.address).toEqual({ street: '18 Oak Street', city: 'Vallejo', state: 'CA', zip: '94590' });
-
-    // The inline address is text on the lead only, so a real one is created after.
-    // country is mandatory — HCP 422s "Country is required" without it.
-    expect(createAddressMock).toHaveBeenCalledWith(ctx, 'cus_new', {
-      street: '18 Oak Street',
-      city: 'Vallejo',
-      state: 'CA',
-      zip: '94590',
-      country: 'US',
-    });
-    // ...and the caller must be cached, or customer_lookup misses them next time.
+    // Nested under customer, not top level: only that shape becomes a real
+    // customer address and links it to the lead.
+    expect(body.customer?.addresses).toEqual([
+      { street: '18 Oak Street', city: 'Vallejo', state: 'CA', zip: '94590' },
+    ]);
+    expect('address' in body).toBe(false);
+    // Provenance the customer used to get only from create_customer.
+    expect(body.customer?.tags).toEqual(['Clara']);
+    expect(body.customer?.notes).toMatch(/^Created by Clara on /);
+    // The caller must be cached, or customer_lookup misses them next time.
     expect(upsertCustomerMock).toHaveBeenCalledWith('tenant-1', expect.objectContaining({ id: 'cus_new' }));
     expect(setMatchedCustomerMock).toHaveBeenCalledWith('sess-1', 'cus_new', 'Dana Reed', 'new_customer');
 
@@ -374,13 +384,13 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(JSON.parse(res.result).status).toBe('created');
   });
 
-  it('still logs the lead when saving the new address fails', async () => {
+  it('still logs the lead when HCP returns no saved address', async () => {
     createLeadMock.mockResolvedValue({
       id: 'lea_9',
       number: 140,
       customer: { id: 'cus_new', first_name: 'Dana', last_name: 'Reed' },
+      address: null,
     });
-    createAddressMock.mockRejectedValue(new Error('HCP POST /customers/cus_new/addresses → 500'));
 
     const res = await handleCreateLead(
       makeSession({ housecallproCustomerId: null, serviceAddressMap: null }),
@@ -398,6 +408,25 @@ describe('handleCreateLead — lead-only intake', () => {
 
     expect(JSON.parse(res.result).status).toBe('created');
     expect(insertLeadMock.mock.calls[0][1].addressId).toBeNull();
+  });
+
+  it('stamps the new customer with the same lead source as the lead', async () => {
+    createLeadMock.mockResolvedValue({
+      id: 'lea_9', number: 140,
+      customer: { id: 'cus_new', first_name: 'Dana', last_name: 'Reed' },
+      address: { id: 'adr_new' },
+    });
+
+    await handleCreateLead(
+      makeSession({ housecallproCustomerId: null, serviceAddressMap: null, leadSourceName: 'Google' }),
+      ctx,
+      { issue: 'No power', first_name: 'Dana', last_name: 'Reed',
+        street: '18 Oak Street', city: 'Vallejo', state: 'CA', zip: '94590' },
+    );
+
+    const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
+    expect(body.lead_source).toBe('Google');
+    expect(body.customer?.lead_source).toBe('Google');
   });
 
   it('errors when no address is selected', async () => {

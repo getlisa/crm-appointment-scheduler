@@ -12,6 +12,7 @@ import { createCustomer, createAddress, getCustomerAddresses } from '../client.j
 import { upsertCustomer, appendAddressId, getCustomerByHcpId } from '../db/customers.js';
 import { setMatchedCustomer, setServiceAddressMap } from '../db/callsessions.js';
 import { normalizePhoneLast10 } from '../fuzzy-search.js';
+import { normalizeEmail } from '../email.js';
 import { toAddressLite, scoreAddress, formatAddress } from '../address.js';
 import type {
   HcpCallSessionRow,
@@ -78,7 +79,9 @@ export async function handleCreateCustomer(
     const created = await createCustomer(ctx, {
       first_name: firstName,
       last_name: lastName,
-      email: (args.email as string | undefined)?.trim() || undefined,
+      // A spoken email ("subham at g-mail dot com") is a 400 from HCP that would
+      // fail the whole customer, so an unsalvageable one is dropped instead.
+      email: normalizeEmail(args.email as string | undefined) ?? undefined,
       company: (args.company as string | undefined)?.trim() || undefined,
       mobile_number: mobileNumber || undefined,
       notifications_enabled: true,
