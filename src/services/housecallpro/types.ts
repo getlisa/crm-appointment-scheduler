@@ -119,6 +119,69 @@ export interface HcpCreateJobInput {
   notes?: string;
 }
 
+/**
+ * Body sent to POST /leads (create lead).
+ *
+ * Field names verified against Pierce Electric's live account on 2026-09-30:
+ *   - `note` is SINGULAR. A `notes` key is accepted by the API and then silently
+ *     dropped — it never reaches the lead's Private Notes.
+ *   - `job_type_uuid` is TOP LEVEL. The `job_fields.job_type_uuid` shape appears
+ *     in the response but is ignored on write.
+ *   - A lead always needs a customer: `customer_id` here, or an inline customer
+ *     object we deliberately don't use (create_customer runs first so the
+ *     customer is in our cache before the session can reference it).
+ */
+export interface HcpCreateLeadInput {
+  /** An existing customer. Mutually exclusive with `customer`. */
+  customer_id?: string;
+  /**
+   * A new customer, created as a side effect of the lead. HCP returns the full
+   * customer on the response, but does NOT apply `tags`, `lead_source` or
+   * `notes` to it, and does not save `address` as a customer address record —
+   * verified 2026-10-06 against lead #136.
+   */
+  customer?: {
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    mobile_number?: string;
+    company?: string;
+  };
+  /** An address already on the customer. Mutually exclusive with `address`. */
+  address_id?: string;
+  /** Address text stored on the lead only — it creates no customer address. */
+  address?: {
+    street?: string;
+    street_line_2?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+  };
+  note?: string;
+  job_type_uuid?: string;
+  tags?: string[];
+  lead_source?: string;
+}
+
+/** GET /lead_sources response. `name` is what POST /leads accepts; the id is never sent. */
+export interface HcpLeadSourcesListResponse {
+  page: number;
+  page_size: number;
+  total_pages: number;
+  total_items: number;
+  lead_sources: { id: string; name: string; editable?: boolean }[];
+}
+
+/** POST /leads response (loose — only the fields we read/persist are typed). */
+export interface HcpLeadResponse {
+  id: string;
+  number?: number | null;
+  customer?: HcpApiCustomer | null;
+  lead_source?: string | null;
+  job_fields?: { job_type_uuid?: string | null; business_unit_uuid?: string | null } | null;
+  [key: string]: unknown;
+}
+
 /** POST /jobs response (loose — only the fields we read/persist are typed). */
 export interface HcpJobResponse {
   id: string;
@@ -178,6 +241,7 @@ export interface HcpCustomerRow {
 export type HcpCallStatus =
   | 'active'
   | 'job_created'
+  | 'lead_created'
   | 'escalated'
   | 'handed_off'
   | 'ended'
@@ -204,6 +268,8 @@ export interface HcpCallSessionRow {
   toNumber: string | null;
   /** Tracking line parsed from the SIP Diversion header; used for lead-source attribution. */
   leadSourceNumber: string | null;
+  /** HCP lead source resolved from that line at call start. Null when it maps to nothing. */
+  leadSourceName: string | null;
   housecallproCustomerId: string | null;
   customerName: string | null;
   matchTier: string | null;
@@ -213,6 +279,11 @@ export interface HcpCallSessionRow {
   selectedTechnicianId: string | null;
   housecallproJobId: string | null;
   housecallproJobNumber: string | null;
+  /** HCP lead (lea_...) created by create_lead — Pierce's lead-only intake. */
+  housecallproLeadId: string | null;
+  housecallproLeadNumber: number | null;
+  /** HCP job type (jbt_...) the agent classified, resolved from housecallpro_job_types. */
+  jobTypeUuid: string | null;
   escalationType: string | null;
   escalationSummary: string | null;
   status: HcpCallStatus;

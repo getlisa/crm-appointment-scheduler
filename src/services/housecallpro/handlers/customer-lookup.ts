@@ -6,8 +6,15 @@
  * setup — the agent calls this once the caller asks for a service request. It looks
  * the caller up by the number they're calling from (stored on the session) and, on
  * a single match, records the customer on the session so the downstream flow
- * (match_address / book_job) works. Return shape mirrors handleLookupFuzzy so the
- * agent branches identically: found / not_found (→ fuzzy) / multiple_matches.
+ * (match_address / book_job / create_lead) works. Return shape mirrors
+ * handleLookupFuzzy so the agent branches identically: found / not_found
+ * (→ fuzzy) / multiple_matches.
+ *
+ * Every result also carries `ask_lead_source`. It is true when the dialed line
+ * maps to no HCP lead source, which is the agent's cue to ask "how did you hear
+ * about us?" later in the call and pass the answer to create_lead. Riding on
+ * this call keeps attribution free of an extra round trip — customer_lookup runs
+ * first on every call anyway.
  */
 
 import { findCustomersByPhone, getCustomerByHcpId } from '../db/customers.js';
@@ -18,6 +25,14 @@ import type { HcpCallSessionRow, RetellFunctionResult } from '../types.js';
 export async function handleCustomerLookup(
   session: HcpCallSessionRow,
 ): Promise<RetellFunctionResult> {
+  // Whether Clara has to ask "how did you hear about us?".
+  //
+  // Two conditions, both required. The dialed line must map to no HCP lead
+  // source (resolved once at call start and pinned to the session), AND the
+  // caller must be someone we don't already know — asking a repeat customer
+  // where they heard of us is a question they have already answered.
+  const leadSourceUnknown = !session.leadSourceName;
+
   // Idempotent: if already identified (e.g. the agent calls it twice), return the match.
   if (session.housecallproCustomerId) {
     const c = await getCustomerByHcpId(session.tenantId, session.housecallproCustomerId).catch(() => null);
@@ -29,6 +44,7 @@ export async function handleCustomerLookup(
         customer_name: session.customerName ?? c?.name ?? '',
         first_name: c?.firstName ?? '',
         last_name: c?.lastName ?? '',
+        ask_lead_source: false,
       }),
     };
   }
@@ -48,13 +64,16 @@ export async function handleCustomerLookup(
         customer_name: c.name,
         first_name: c.firstName ?? '',
         last_name: c.lastName ?? '',
+        ask_lead_source: false,
       }),
     };
   }
 
   if (matches.length === 0) {
     // Do NOT record a customer — leaves the door open for lookup_customer_fuzzy.
-    return { result: JSON.stringify({ status: 'not_found', identified: false }) };
+    return {
+      result: JSON.stringify({ status: 'not_found', identified: false, ask_lead_source: leadSourceUnknown }),
+    };
   }
 
   // 2+ matches on the same number — let the agent disambiguate, then confirm_customer.
@@ -63,6 +82,7 @@ export async function handleCustomerLookup(
       status: 'multiple_matches',
       identified: false,
       candidates: matches.map(m => ({ id: m.housecallproCustomerId, name: m.name })),
+      ask_lead_source: false,
     }),
   };
 }

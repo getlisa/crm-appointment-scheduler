@@ -14,9 +14,9 @@
  */
 
 import { createJob } from '../client.js';
+import { resolveNotes } from '../requestNotes.js';
 import { insertJob } from '../db/jobs.js';
 import { getCustomerByHcpId } from '../db/customers.js';
-import { resolveLeadSource } from '../db/leadSources.js';
 import { setJobCreated, setSelectedSlot } from '../db/callsessions.js';
 import { sendHcpNotification } from '../emailNotificationService.js';
 import type {
@@ -25,99 +25,6 @@ import type {
   HcpCreateJobInput,
   RetellFunctionResult,
 } from '../types.js';
-
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
-
-/**
- * Parses a local ISO wall time ("2026-08-04T09:00:00", already in the tenant's
- * timezone) into a friendly date plus its hour/minute — e.g.
- * { date: "August 4, 2026", hour: 9, minute: 0 }. No timezone conversion.
- */
-/**
- * Parses a local time string into a friendly date plus its hour (0-23) and minute.
- * Accepts 24-hour ISO ("2026-08-04T14:00:00") and tolerates a single-digit hour
- * and an explicit AM/PM suffix ("2026-08-04T2:00 PM" → hour 14). No tz conversion.
- */
-function formatLocalDate(iso?: string | null): { date: string; hour: number; minute: number } | null {
-  const m = iso?.trim().match(/^(\d{4})-(\d{2})-(\d{2})[T ]\s*(\d{1,2}):(\d{2})(?::\d{2})?\s*(am|pm)?/i);
-  if (!m) return null;
-  const [, y, mo, d, hh, mi, ap] = m;
-  let hour = Number(hh);
-  if (ap) {
-    const isPm = ap.toLowerCase() === 'pm';
-    if (isPm && hour < 12) hour += 12; // 2 PM → 14
-    if (!isPm && hour === 12) hour = 0; // 12 AM → 0
-  }
-  if (hour > 23) hour %= 24;
-  return { date: `${MONTHS[Number(mo) - 1]} ${Number(d)}, ${y}`, hour, minute: Number(mi) };
-}
-
-/** Coarse part of day, so notes/emails never imply a specific booked time. */
-function partOfDay(hour: number): 'morning' | 'afternoon' | 'evening' {
-  if (hour < 12) return 'morning';
-  if (hour < 17) return 'afternoon';
-  return 'evening';
-}
-
-/** A part-of-day word if the text explicitly says one (wins over a parsed hour). */
-function partOfDayFromText(text?: string | null): 'morning' | 'afternoon' | 'evening' | null {
-  const t = (text ?? '').toLowerCase();
-  if (/\bmorning\b/.test(t)) return 'morning';
-  if (/\bafternoon\b/.test(t)) return 'afternoon';
-  if (/\b(evening|tonight|night)\b/.test(t)) return 'evening';
-  return null;
-}
-
-/**
- * The caller's requested time for the office as a non-committal date + coarse part
- * of day only — never a specific time or window, so nothing implies a booked slot.
- * e.g. "Job logged for August 4, 2026 in the morning". Handles 24-hour and AM/PM
- * times; an explicit "morning/afternoon/evening" word wins over the parsed hour.
- */
-function resolveWindowText(args: Record<string, unknown>): string | null {
-  const startRaw = (args.scheduled_start as string | undefined)?.trim();
-  const display = (args.slot_display as string | undefined)?.trim();
-  const d = formatLocalDate(startRaw);
-  if (d) {
-    const worded = partOfDayFromText(startRaw) ?? partOfDayFromText(display);
-    if (worded) return `Job logged for ${d.date} in the ${worded}`;
-    if (d.hour === 0 && d.minute === 0) return `Job logged for ${d.date}`;
-    return `Job logged for ${d.date} in the ${partOfDay(d.hour)}`;
-  }
-  return display ? `Job logged for ${display}` : null;
-}
-
-/**
- * Builds the job notes for the office. HCP receives no line items or schedule,
- * so the classified service, the caller's full account, and the requested window
- * live here:
- *
- *   Service :- <canonical service type>            (omitted if not classified)
- *   Issue Description :- <caller's complete account>
- *   Job logged for <date> in the <morning/afternoon/evening>
- *
- * `issue` is the caller's own words (everything they said); `service_type` is the
- * canonical classification. `service_name` is kept as a legacy fallback for the issue.
- */
-function resolveNotes(args: Record<string, unknown>): string {
-  const serviceType = (args.service_type as string | undefined)?.trim();
-  const issue =
-    (args.issue as string | undefined)?.trim() ||
-    (args.service_name as string | undefined)?.trim() ||
-    (args.reason as string | undefined)?.trim() ||
-    (args.job_type as string | undefined)?.trim() ||
-    'Service request';
-
-  let notes = '';
-  if (serviceType) notes += `Service :- ${serviceType}\n`;
-  notes += `Issue Description :- ${issue}`;
-  const window = resolveWindowText(args);
-  if (window) notes += `\n${window}`;
-  return notes;
-}
 
 /**
  * Creates the job, and retries once without `lead_source` when HCP rejects the
@@ -163,15 +70,14 @@ export async function handleBookJob(
 
   const notes = resolveNotes(args);
 
-  // Attribute the job to the HCP lead source behind the dialed tracking line.
-  // Prefer the SIP Diversion tracking line (the actual lead source); fall back to
-  // to_number (the shared DID) only when the diversion wasn't captured.
-  const lead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
+  // Attribute the job to the HCP lead source behind the dialed tracking line,
+  // resolved once at call start and pinned to the session.
+  //
   // `lead_source` is a lead-source NAME, not an id: HCP looks the string up among
   // the account's configured lead sources and rejects the whole job with
-  // 400 "Lead source not found" when it doesn't match. So an unmapped line (or a
-  // row with no lead_name) sends no lead_source at all — never an `lsrc_…` id.
-  const leadSource = lead?.leadName ?? null;
+  // 400 "Lead source not found" when it doesn't match. So an unmapped line sends
+  // no lead_source at all — never an `lsrc_…` id.
+  const leadSource = session.leadSourceName;
 
   // Unscheduled "new job": no `schedule`, no `line_items` — the issue + requested
   // window are in `notes`. HCP returns work_status "new job".

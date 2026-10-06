@@ -10,7 +10,6 @@
 
 import { createCustomer, createAddress, getCustomerAddresses } from '../client.js';
 import { upsertCustomer, appendAddressId, getCustomerByHcpId } from '../db/customers.js';
-import { resolveLeadSource } from '../db/leadSources.js';
 import { setMatchedCustomer, setServiceAddressMap } from '../db/callsessions.js';
 import { normalizePhoneLast10 } from '../fuzzy-search.js';
 import { toAddressLite, scoreAddress, formatAddress } from '../address.js';
@@ -62,18 +61,18 @@ export async function handleCreateCustomer(
   const mobileNumber = mobileArg || (session.caller ? normalizePhoneLast10(session.caller) : undefined);
 
   // Business rule: customers created by Clara are attributed to the lead source
-  // behind the dialed tracking line (falling back to 'Clara' when unknown), carry
-  // a `Clara` tag as a provenance marker, and a note stamped with the call date.
-  // The reason for the visit is not stored here — it becomes the job notes in handleBookJob.
+  // behind the dialed tracking line, carry a `Clara` tag as a provenance marker,
+  // and a note stamped with the call date. The reason for the visit is not stored
+  // here — it goes in the notes on the job or lead that follows.
   const callDate = new Date().toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
   });
-  const lead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
   // `lead_source` is a lead-source NAME, not an id — HCP rejects anything that is
-  // not one of the account's configured names, so send nothing when unmapped.
-  const leadSource = lead?.leadName ?? null;
+  // not one of the account's configured names. The name was resolved once at call
+  // start; null means the dialed line mapped to nothing, so send no lead_source.
+  const leadSource = session.leadSourceName;
 
   try {
     const created = await createCustomer(ctx, {

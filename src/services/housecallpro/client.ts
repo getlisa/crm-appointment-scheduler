@@ -15,6 +15,9 @@ import type {
   HcpCreateAddressInput,
   HcpCreateJobInput,
   HcpJobResponse,
+  HcpCreateLeadInput,
+  HcpLeadResponse,
+  HcpLeadSourcesListResponse,
 } from './types.js';
 
 const BASE_URL = 'https://api.housecallpro.com';
@@ -148,4 +151,28 @@ export async function createJob(
   body: HcpCreateJobInput,
 ): Promise<HcpJobResponse> {
   return request<HcpJobResponse>(ctx, 'POST', '/jobs', body);
+}
+
+// ── Leads ─────────────────────────────────────────────────────────────────────
+
+/** Lists the lead sources configured on the account (names + lsrc_ ids). */
+export async function listLeadSources(
+  ctx: HcpContext,
+  pageSize = MAX_PAGE_SIZE,
+): Promise<HcpLeadSourcesListResponse> {
+  const size = Math.min(pageSize, MAX_PAGE_SIZE);
+  return request<HcpLeadSourcesListResponse>(ctx, 'GET', `/lead_sources?page_size=${size}`);
+}
+
+/**
+ * Creates a lead. Returns the created lead (id = lea_... plus its number).
+ *
+ * HCP has no customer-less lead: POST /leads with no customer is rejected with
+ * 400 "Customer is required". We always pass an existing `customer_id`.
+ */
+export async function createLead(
+  ctx: HcpContext,
+  body: HcpCreateLeadInput,
+): Promise<HcpLeadResponse> {
+  return request<HcpLeadResponse>(ctx, 'POST', '/leads', body);
 }

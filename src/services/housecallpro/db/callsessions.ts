@@ -19,6 +19,7 @@ function mapRow(row: Record<string, unknown>): HcpCallSessionRow {
     caller: row.caller as string,
     toNumber: (row.to_number as string | null) ?? null,
     leadSourceNumber: (row.lead_source_number as string | null) ?? null,
+    leadSourceName: (row.lead_source_name as string | null) ?? null,
     housecallproCustomerId: (row.housecallpro_customer_id as string | null) ?? null,
     customerName: (row.customer_name as string | null) ?? null,
     matchTier: (row.match_tier as string | null) ?? null,
@@ -28,6 +29,9 @@ function mapRow(row: Record<string, unknown>): HcpCallSessionRow {
     selectedTechnicianId: (row.selected_technician_id as string | null) ?? null,
     housecallproJobId: (row.housecallpro_job_id as string | null) ?? null,
     housecallproJobNumber: (row.housecallpro_job_number as string | null) ?? null,
+    housecallproLeadId: (row.housecallpro_lead_id as string | null) ?? null,
+    housecallproLeadNumber: (row.housecallpro_lead_number as number | null) ?? null,
+    jobTypeUuid: (row.job_type_uuid as string | null) ?? null,
     escalationType: (row.escalation_type as string | null) ?? null,
     escalationSummary: (row.escalation_summary as string | null) ?? null,
     status: (row.status as HcpCallStatus) ?? 'active',
@@ -127,6 +131,17 @@ export async function setLeadSourceNumber(sessionId: string, leadSourceNumber: s
     .eq('session_id', sessionId);
 }
 
+/**
+ * Stores the HCP lead source resolved from the tracking line. Written once at
+ * call start so no handler has to resolve it again mid-call.
+ */
+export async function setLeadSourceName(sessionId: string, leadSourceName: string | null): Promise<void> {
+  await supabase
+    .from('housecallpro_callsessions')
+    .update({ lead_source_name: leadSourceName })
+    .eq('session_id', sessionId);
+}
+
 export async function setMatchedCustomer(
   sessionId: string,
   housecallproCustomerId: string,
@@ -179,6 +194,35 @@ export async function setJobCreated(
       housecallpro_job_id: jobId,
       housecallpro_job_number: jobNumber,
       status: 'job_created',
+    })
+    .eq('session_id', sessionId);
+}
+
+/**
+ * Pins the HCP job type the agent classified, so create_lead can pick it up
+ * later in the call without the classification riding on its own arguments.
+ */
+export async function setJobType(sessionId: string, jobTypeUuid: string): Promise<void> {
+  await supabase
+    .from('housecallpro_callsessions')
+    .update({ job_type_uuid: jobTypeUuid })
+    .eq('session_id', sessionId);
+}
+
+/** Records the HCP lead create_lead just logged (Pierce's lead-only intake). */
+export async function setLeadCreated(
+  sessionId: string,
+  leadId: string,
+  leadNumber: number | null,
+  jobTypeUuid: string | null,
+): Promise<void> {
+  await supabase
+    .from('housecallpro_callsessions')
+    .update({
+      housecallpro_lead_id: leadId,
+      housecallpro_lead_number: leadNumber,
+      job_type_uuid: jobTypeUuid,
+      status: 'lead_created',
     })
     .eq('session_id', sessionId);
 }

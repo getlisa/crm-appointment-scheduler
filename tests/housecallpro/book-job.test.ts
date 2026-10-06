@@ -50,6 +50,8 @@ function makeSession(overrides: Partial<HcpCallSessionRow> = {}): HcpCallSession
     retellCallId: 'call_1',
     caller: '+13105551212',
     toNumber: '+17476771558',
+    leadSourceNumber: null,
+    leadSourceName: null,
     housecallproCustomerId: 'cus_1',
     customerName: 'Jane Doe',
     matchTier: 'phone',
@@ -75,9 +77,7 @@ beforeEach(() => {
 
 describe('handleBookJob — unscheduled new job', () => {
   it('sends no schedule and no line_items, and puts issue + window in notes', async () => {
-    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'ls_1', leadName: 'Google LSA' });
-
-    const res = await handleBookJob(makeSession(), ctx, {
+    const res = await handleBookJob(makeSession({ leadSourceName: 'Google LSA' }), ctx, {
       service_name: 'AC not cooling',
       scheduled_start: '2026-07-24T14:00:00',
       scheduled_end: '2026-07-24T16:00:00',
@@ -101,43 +101,30 @@ describe('handleBookJob — unscheduled new job', () => {
     expect(result.scheduled_start).toBeUndefined();
   });
 
-  it('resolves lead_source from the dialed line', async () => {
-    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'ls_1', leadName: 'Google LSA' });
+  it('takes lead_source off the session, resolved once at call start', async () => {
+    await handleBookJob(makeSession({ leadSourceName: 'Google LSA' }), ctx, { service_name: 'AC not cooling' });
 
-    await handleBookJob(makeSession(), ctx, { service_name: 'AC not cooling' });
-
-    expect(resolveLeadSourceMock).toHaveBeenCalledWith('+17476771558');
     const body = createJobMock.mock.calls[0][1] as HcpCreateJobInput;
     expect(body.lead_source).toBe('Google LSA');
   });
 
-  it('never sends the lsrc_ id in the lead_source name field', async () => {
-    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'lsrc_abc', leadName: null });
-
-    await handleBookJob(makeSession(), ctx, { service_name: 'AC not cooling' });
-
-    const body = createJobMock.mock.calls[0][1] as HcpCreateJobInput;
-    expect('lead_source' in body).toBe(false);
-  });
-
   it('sends no lead_source when the line has no lead-source mapping', async () => {
-    resolveLeadSourceMock.mockResolvedValue(null);
-
-    await handleBookJob(makeSession(), ctx, { service_name: 'AC not cooling' });
+    await handleBookJob(makeSession({ leadSourceName: null }), ctx, { service_name: 'AC not cooling' });
 
     const body = createJobMock.mock.calls[0][1] as HcpCreateJobInput;
     expect('lead_source' in body).toBe(false);
   });
 
   it('retries without lead_source when HCP rejects the stored lead name', async () => {
-    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'ls_1', leadName: 'google my business' });
     createJobMock
       .mockRejectedValueOnce(
         new Error('HCP POST /jobs → 400: {"error":{"message":"Lead source not found"}}'),
       )
       .mockResolvedValueOnce({ id: 'job_2', invoice_number: '1043', work_status: 'new job' });
 
-    const res = await handleBookJob(makeSession(), ctx, { service_name: 'AC not cooling' });
+    const res = await handleBookJob(
+      makeSession({ leadSourceName: 'google my business' }), ctx, { service_name: 'AC not cooling' },
+    );
 
     expect(createJobMock).toHaveBeenCalledTimes(2);
     const retryBody = createJobMock.mock.calls[1][1] as HcpCreateJobInput;
@@ -146,10 +133,11 @@ describe('handleBookJob — unscheduled new job', () => {
   });
 
   it('does not retry when the failure is unrelated to the lead source', async () => {
-    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'ls_1', leadName: 'Google LSA' });
     createJobMock.mockRejectedValueOnce(new Error('HCP POST /jobs → 500: boom'));
 
-    const res = await handleBookJob(makeSession(), ctx, { service_name: 'AC not cooling' });
+    const res = await handleBookJob(
+      makeSession({ leadSourceName: 'Google LSA' }), ctx, { service_name: 'AC not cooling' },
+    );
 
     expect(createJobMock).toHaveBeenCalledTimes(1);
     expect(res.result).toContain('job creation failed');
