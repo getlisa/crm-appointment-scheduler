@@ -140,6 +140,15 @@ export interface HcpCreateLeadInput {
   lead_source?: string;
 }
 
+/** GET /lead_sources response. `name` is what POST /leads accepts; the id is never sent. */
+export interface HcpLeadSourcesListResponse {
+  page: number;
+  page_size: number;
+  total_pages: number;
+  total_items: number;
+  lead_sources: { id: string; name: string; editable?: boolean }[];
+}
+
 /** POST /leads response (loose — only the fields we read/persist are typed). */
 export interface HcpLeadResponse {
   id: string;

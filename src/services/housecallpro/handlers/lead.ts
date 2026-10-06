@@ -23,6 +23,7 @@ import { insertLead } from '../db/leads.js';
 import { getCustomerByHcpId } from '../db/customers.js';
 import { resolveJobTypeName, resolveJobTypeUuid } from '../db/jobTypes.js';
 import { resolveLeadSource } from '../db/leadSources.js';
+import { matchLeadSource } from '../leadSourceMatch.js';
 import { setLeadCreated, setSelectedSlot } from '../db/callsessions.js';
 import { sendHcpNotification } from '../emailNotificationService.js';
 import type {
@@ -76,7 +77,7 @@ export async function handleCreateLead(
 
   // A lead carries no schedule in HCP, so the caller's part-of-day preference is
   // written into the note alongside the service type and their account.
-  const note = resolveNotes(args, { label: 'Request', jobTypeAsIssueFallback: false });
+  let note = resolveNotes(args, { label: 'Request', jobTypeAsIssueFallback: false });
 
   // Classification normally arrives earlier in the call via set_job_type, which
   // pins the uuid to the session. A job_type argument is still honoured as a
@@ -95,18 +96,34 @@ export async function handleCreateLead(
   const jobTypeName =
     spokenJobType ?? (await resolveJobTypeName(session.tenantId, jobTypeUuid).catch(() => null));
 
-  // Attribution: the answer Clara collected when the dialed line is unmapped wins,
-  // otherwise the tracking line behind the call.
+  // Attribution. `lead_source` is a lead-source NAME, not an id: HCP looks the
+  // string up among the account's configured lead sources and rejects the whole
+  // lead with 400 "Lead source not found" when it doesn't match. So nothing
+  // unverified is ever sent — and never an `lsrc_…` id.
   //
-  // `lead_source` is a lead-source NAME, not an id: HCP looks the string up among
-  // the account's configured lead sources and rejects the whole lead with
-  // 400 "Lead source not found" when it doesn't match. So an unmapped line (or a
-  // row with no lead_name) sends no lead_source at all — never an `lsrc_…` id.
+  // The dialed tracking line is resolved first. Only when it maps to nothing is
+  // Clara asked, and her answer is the caller's own free text, which has to be
+  // narrowed to a configured name before it can be sent.
   const spokenLeadSource = (args.lead_source as string | undefined)?.trim() || null;
   const dialedLead = spokenLeadSource
     ? null
     : await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
-  const leadSource = spokenLeadSource ?? dialedLead?.leadName ?? null;
+  const matchedSpoken = spokenLeadSource
+    ? await matchLeadSource(ctx, spokenLeadSource).catch(() => null)
+    : null;
+  const leadSource = matchedSpoken ?? dialedLead?.leadName ?? null;
+
+  // The caller's own words go on the lead either way, so an answer that matches
+  // no configured source costs the attribution but is still in front of the office.
+  if (spokenLeadSource) {
+    note += `\nHeard about us :- ${spokenLeadSource}`;
+    if (!matchedSpoken) {
+      console.warn('[hcp] create_lead spoken lead source matched nothing', {
+        sessionId: session.sessionId,
+        spokenLeadSource,
+      });
+    }
+  }
 
   const body: HcpCreateLeadInput = {
     customer_id: customerId,

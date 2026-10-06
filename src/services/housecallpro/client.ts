@@ -17,6 +17,7 @@ import type {
   HcpJobResponse,
   HcpCreateLeadInput,
   HcpLeadResponse,
+  HcpLeadSourcesListResponse,
 } from './types.js';
 
 const BASE_URL = 'https://api.housecallpro.com';
@@ -153,6 +154,15 @@ export async function createJob(
 }
 
 // ── Leads ─────────────────────────────────────────────────────────────────────
+
+/** Lists the lead sources configured on the account (names + lsrc_ ids). */
+export async function listLeadSources(
+  ctx: HcpContext,
+  pageSize = MAX_PAGE_SIZE,
+): Promise<HcpLeadSourcesListResponse> {
+  const size = Math.min(pageSize, MAX_PAGE_SIZE);
+  return request<HcpLeadSourcesListResponse>(ctx, 'GET', `/lead_sources?page_size=${size}`);
+}
 
 /**
  * Creates a lead. Returns the created lead (id = lea_... plus its number).

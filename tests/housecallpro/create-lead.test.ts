@@ -27,6 +27,9 @@ vi.mock('../../src/services/housecallpro/db/jobTypes.js', () => ({
 vi.mock('../../src/services/housecallpro/db/leadSources.js', () => ({
   resolveLeadSource: vi.fn(),
 }));
+vi.mock('../../src/services/housecallpro/leadSourceMatch.js', () => ({
+  matchLeadSource: vi.fn(),
+}));
 vi.mock('../../src/services/housecallpro/db/callsessions.js', () => ({
   setLeadCreated: vi.fn().mockResolvedValue(undefined),
   setSelectedSlot: vi.fn().mockResolvedValue(undefined),
@@ -40,6 +43,7 @@ import { createLead } from '../../src/services/housecallpro/client.js';
 import { insertLead } from '../../src/services/housecallpro/db/leads.js';
 import { resolveJobTypeUuid, resolveJobTypeName } from '../../src/services/housecallpro/db/jobTypes.js';
 import { resolveLeadSource } from '../../src/services/housecallpro/db/leadSources.js';
+import { matchLeadSource } from '../../src/services/housecallpro/leadSourceMatch.js';
 import { setLeadCreated } from '../../src/services/housecallpro/db/callsessions.js';
 import { sendHcpNotification } from '../../src/services/housecallpro/emailNotificationService.js';
 import type {
@@ -53,6 +57,7 @@ const insertLeadMock = insertLead as unknown as Mock;
 const resolveJobTypeUuidMock = resolveJobTypeUuid as unknown as Mock;
 const resolveJobTypeNameMock = resolveJobTypeName as unknown as Mock;
 const resolveLeadSourceMock = resolveLeadSource as unknown as Mock;
+const matchLeadSourceMock = matchLeadSource as unknown as Mock;
 const setLeadCreatedMock = setLeadCreated as unknown as Mock;
 const sendHcpNotificationMock = sendHcpNotification as unknown as Mock;
 
@@ -95,6 +100,7 @@ beforeEach(() => {
   resolveJobTypeUuidMock.mockResolvedValue(null);
   resolveJobTypeNameMock.mockResolvedValue(null);
   resolveLeadSourceMock.mockResolvedValue(null);
+  matchLeadSourceMock.mockResolvedValue(null);
 });
 
 describe('handleCreateLead — lead-only intake', () => {
@@ -180,18 +186,36 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(body.note).toBe('Issue Description :- Something is buzzing behind the wall');
   });
 
-  it('prefers the spoken lead source over the dialed line', async () => {
-    resolveLeadSourceMock.mockResolvedValue({ leadSourceId: 'ls_1', leadName: 'Google' });
+  it('sends the configured name the caller\'s words matched, not the words', async () => {
+    matchLeadSourceMock.mockResolvedValue('neighbor');
 
     await handleCreateLead(makeSession(), ctx, {
       service_type: 'Electrical Repair',
       issue: 'Breaker keeps tripping',
-      lead_source: 'neighbor',
+      lead_source: 'my neighbour used you last year',
+    });
+
+    expect(matchLeadSourceMock).toHaveBeenCalledWith(ctx, 'my neighbour used you last year');
+    const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
+    expect(body.lead_source).toBe('neighbor');
+    // The spoken answer wins over the dialed line, so that is never consulted.
+    expect(resolveLeadSourceMock).not.toHaveBeenCalled();
+    // ...and the caller's own words survive on the lead.
+    expect(body.note).toContain('Heard about us :- my neighbour used you last year');
+  });
+
+  it('keeps the words on the lead but sends no lead_source when nothing matches', async () => {
+    matchLeadSourceMock.mockResolvedValue(null);
+
+    const res = await handleCreateLead(makeSession(), ctx, {
+      issue: 'Breaker keeps tripping',
+      lead_source: 'the guy who did my panel',
     });
 
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
-    expect(body.lead_source).toBe('neighbor');
-    expect(resolveLeadSourceMock).not.toHaveBeenCalled();
+    expect('lead_source' in body).toBe(false);
+    expect(body.note).toContain('Heard about us :- the guy who did my panel');
+    expect(JSON.parse(res.result).status).toBe('created');
   });
 
   it('falls back to the dialed tracking line when the caller was not asked', async () => {
