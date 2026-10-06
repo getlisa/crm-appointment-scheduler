@@ -187,6 +187,7 @@ describe('handleCreateLead — lead-only intake', () => {
   });
 
   it('sends the configured name the caller\'s words matched, not the words', async () => {
+    resolveLeadSourceMock.mockResolvedValue(null); // tracking line maps to nothing
     matchLeadSourceMock.mockResolvedValue('neighbor');
 
     await handleCreateLead(makeSession(), ctx, {
@@ -198,13 +199,31 @@ describe('handleCreateLead — lead-only intake', () => {
     expect(matchLeadSourceMock).toHaveBeenCalledWith(ctx, 'my neighbour used you last year');
     const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
     expect(body.lead_source).toBe('neighbor');
-    // The spoken answer wins over the dialed line, so that is never consulted.
-    expect(resolveLeadSourceMock).not.toHaveBeenCalled();
     // ...and the caller's own words survive on the lead.
     expect(body.note).toContain('Heard about us :- my neighbour used you last year');
   });
 
+  it('lets the dialed tracking line beat whatever the caller said', async () => {
+    resolveLeadSourceMock.mockResolvedValue({
+      leadSourceId: 'lsrc_7b2',
+      leadName: 'Google Local Services Vallejo',
+    });
+
+    await handleCreateLead(makeSession({ leadSourceNumber: '+17075134910' }), ctx, {
+      issue: 'Breaker keeps tripping',
+      lead_source: 'I saw your van',
+    });
+
+    const body = createLeadMock.mock.calls[0][1] as HcpCreateLeadInput;
+    expect(body.lead_source).toBe('Google Local Services Vallejo');
+    // The spoken answer is not consulted at all when the line resolved.
+    expect(matchLeadSourceMock).not.toHaveBeenCalled();
+    // It is still recorded, because the two disagreeing is worth seeing.
+    expect(body.note).toContain('Heard about us :- I saw your van');
+  });
+
   it('keeps the words on the lead but sends no lead_source when nothing matches', async () => {
+    resolveLeadSourceMock.mockResolvedValue(null);
     matchLeadSourceMock.mockResolvedValue(null);
 
     const res = await handleCreateLead(makeSession(), ctx, {

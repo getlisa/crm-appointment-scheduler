@@ -101,23 +101,29 @@ export async function handleCreateLead(
   // lead with 400 "Lead source not found" when it doesn't match. So nothing
   // unverified is ever sent — and never an `lsrc_…` id.
   //
-  // The dialed tracking line is resolved first. Only when it maps to nothing is
-  // Clara asked, and her answer is the caller's own free text, which has to be
-  // narrowed to a configured name before it can be sent.
-  const spokenLeadSource = (args.lead_source as string | undefined)?.trim() || null;
-  const dialedLead = spokenLeadSource
-    ? null
-    : await resolveLeadSource(session.leadSourceNumber ?? session.toNumber).catch(() => null);
-  const matchedSpoken = spokenLeadSource
-    ? await matchLeadSource(ctx, spokenLeadSource).catch(() => null)
-    : null;
-  const leadSource = matchedSpoken ?? dialedLead?.leadName ?? null;
+  // The dialed tracking line is the authority: it is a fact about which number
+  // rang, captured at call_started, and it beats anything said on the call. The
+  // caller is only asked when that line maps to nothing (customer_lookup returns
+  // ask_lead_source), and their free text then has to be narrowed to a configured
+  // name before it can be sent.
+  const dialedLead = await resolveLeadSource(session.leadSourceNumber ?? session.toNumber)
+    .catch(() => null);
+  const dialedName = dialedLead?.leadName ?? null;
 
-  // The caller's own words go on the lead either way, so an answer that matches
-  // no configured source costs the attribution but is still in front of the office.
+  const spokenLeadSource = (args.lead_source as string | undefined)?.trim() || null;
+  // Only consult the account's name list when the tracking line left a gap to fill.
+  const matchedSpoken =
+    !dialedName && spokenLeadSource
+      ? await matchLeadSource(ctx, spokenLeadSource).catch(() => null)
+      : null;
+  const leadSource = dialedName ?? matchedSpoken;
+
+  // The caller's own words stay on the lead whenever they gave them — including
+  // when the tracking line already decided the attribution, since the two can
+  // disagree and the office should see both.
   if (spokenLeadSource) {
     note += `\nHeard about us :- ${spokenLeadSource}`;
-    if (!matchedSpoken) {
+    if (!dialedName && !matchedSpoken) {
       console.warn('[hcp] create_lead spoken lead source matched nothing', {
         sessionId: session.sessionId,
         spokenLeadSource,
